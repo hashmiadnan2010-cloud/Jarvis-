@@ -33,16 +33,18 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Build Web Bundle
         run: npx vite build
 
       - name: Install Capacitor & Add Android Platform
         run: |
-          npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npm install --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
           rm -rf android
           npx cap add android
 
