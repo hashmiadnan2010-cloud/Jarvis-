@@ -1,0 +1,12 @@
+{
+  "appId": "com.jarvis.assistant",
+  "appName": "JARVIS AI",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

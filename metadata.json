@@ -1,0 +1,10 @@
+{
+  "name": "JARVIS - AI Voice & PC Automation Assistant",
+  "description": "Futuristic hands-free AI assistant with custom wake-word, WhatsApp messaging automation, system-level PC controls, and bilingual Hindi speech & English execution.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera",
+    "display-capture"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
