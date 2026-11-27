@@ -13,6 +13,7 @@ interface WhatsAppAutomationModalProps {
   } | null;
   onClearDraft?: () => void;
   onDispatchMessage: (phone: string, text: string, contactName: string) => void;
+  onCallContact?: (phone: string, contactName: string) => void;
 }
 
 export const WhatsAppAutomationModal: React.FC<WhatsAppAutomationModalProps> = ({
@@ -21,9 +22,18 @@ export const WhatsAppAutomationModal: React.FC<WhatsAppAutomationModalProps> = (
   activeDraft,
   onClearDraft,
   onDispatchMessage,
+  onCallContact,
 }) => {
   const [selectedContact, setSelectedContact] = useState<Contact>(
-    contacts.find((c) => c.relation.toLowerCase() === 'mother') || contacts[0]
+    contacts.find((c) => c.relation.toLowerCase() === 'mother') ||
+      contacts[0] || {
+        id: 'c-fallback',
+        name: 'Mother',
+        relation: 'Mother',
+        phone: '+919876543210',
+        avatar: '',
+        status: 'online',
+      }
   );
   const [messageText, setMessageText] = useState<string>('');
   const [sentHistory, setSentHistory] = useState<
@@ -275,6 +285,16 @@ export const WhatsAppAutomationModal: React.FC<WhatsAppAutomationModalProps> = (
           </div>
 
           <div className="flex items-center gap-2">
+            {onCallContact && (
+              <button
+                type="button"
+                onClick={() => onCallContact(selectedContact.phone, selectedContact.relation || selectedContact.name)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-orbitron font-bold text-xs uppercase tracking-wider border border-cyan-400/50 bg-cyan-950/70 hover:bg-cyan-900 text-cyan-300 transition-all cursor-pointer"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>CALL NOW</span>
+              </button>
+            )}
             <button
               onClick={handleSend}
               disabled={!messageText.trim()}

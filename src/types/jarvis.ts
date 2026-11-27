@@ -1,5 +1,7 @@
 export type IntentType =
   | 'WHATSAPP_SEND'
+  | 'CALL_CONTACT'
+  | 'SET_LANGUAGE'
   | 'SYSTEM_VOLUME'
   | 'SYSTEM_BRIGHTNESS'
   | 'LAUNCH_APP'
@@ -30,6 +32,7 @@ export interface PCApp {
   status: 'running' | 'idle' | 'background';
   url?: string;
   deepLink?: string;
+  packageName?: string;
   defaultAction?: string;
 }
 
@@ -48,6 +51,8 @@ export interface SystemState {
   isScreenLocked: boolean;
 }
 
+export type PersonalityMode = 'balanced' | 'friend' | 'formal';
+
 export interface VoiceSettings {
   wakeWord: string;
   continuousListening: boolean;
@@ -57,6 +62,11 @@ export interface VoiceSettings {
   soundEffects: boolean;
   preferredHindiVoiceName?: string;
   autoOpenWhatsApp: boolean;
+  backgroundMode?: boolean;
+  alwaysOnWakeWord?: boolean;
+  personalityMode?: PersonalityMode;
+  language?: string;
+  languageCode?: string;
 }
 
 export interface CommandLog {
@@ -79,6 +89,8 @@ export interface CommandLog {
     mediaAction?: string;
     searchQuery?: string;
     noteContent?: string;
+    targetLanguage?: string;
+    targetLanguageCode?: string;
   };
   quickFollowUps?: string[];
 }

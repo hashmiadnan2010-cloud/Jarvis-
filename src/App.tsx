@@ -39,6 +39,85 @@ import { Contact, PCApp, SystemState, VoiceSettings, CommandLog, TerminalEntry }
 import { jarvisSpeech } from './utils/speech';
 import { jarvisAudio } from './utils/audioFx';
 import { getJarvisApiBaseUrl, parseCommandLocallyClient } from './utils/localCommandParser';
+import {
+  consumeNativePendingWakeCommand,
+  dispatchNativeWhatsApp,
+  loadDevicePhoneContacts,
+  makeNativePhoneCall,
+  openExternalWebOrApp,
+  openPhoneApp,
+  syncAssistantNativeConfig,
+  toggleBackgroundKeepAlive,
+} from './utils/androidBridge';
+
+function evaluateMathExpression(expr: string): number {
+  const sanitized = expr.replace(/\s+/g, '');
+  if (!sanitized || !/^[0-9+\-*/.%()]+$/.test(sanitized)) {
+    throw new Error('Invalid expression');
+  }
+  let pos = 0;
+
+  const parseExpression = (): number => {
+    let left = parseTerm();
+    while (pos < sanitized.length && (sanitized[pos] === '+' || sanitized[pos] === '-')) {
+      const op = sanitized[pos++];
+      const right = parseTerm();
+      left = op === '+' ? left + right : left - right;
+    }
+    return left;
+  };
+
+  const parseTerm = (): number => {
+    let left = parseFactor();
+    while (
+      pos < sanitized.length &&
+      (sanitized[pos] === '*' || sanitized[pos] === '/' || sanitized[pos] === '%')
+    ) {
+      const op = sanitized[pos++];
+      const right = parseFactor();
+      if (op === '*') left *= right;
+      else if (op === '/') {
+        if (right === 0) throw new Error('Division by zero');
+        left /= right;
+      } else {
+        left %= right;
+      }
+    }
+    return left;
+  };
+
+  const parseFactor = (): number => {
+    if (sanitized[pos] === '+') {
+      pos++;
+      return parseFactor();
+    }
+    if (sanitized[pos] === '-') {
+      pos++;
+      return -parseFactor();
+    }
+    if (sanitized[pos] === '(') {
+      pos++;
+      const val = parseExpression();
+      if (sanitized[pos] !== ')') throw new Error('Mismatched parentheses');
+      pos++;
+      return val;
+    }
+    const start = pos;
+    while (pos < sanitized.length && /[0-9.]/.test(sanitized[pos])) {
+      pos++;
+    }
+    if (start === pos) throw new Error('Unexpected token');
+    const num = Number(sanitized.slice(start, pos));
+    if (Number.isNaN(num)) throw new Error('Invalid number');
+    return num;
+  };
+
+  const result = parseExpression();
+  if (pos !== sanitized.length || !Number.isFinite(result)) {
+    throw new Error('Invalid expression');
+  }
+  return Number(result.toFixed(8));
+}
 
 // Initial default contacts
 const INITIAL_CONTACTS: Contact[] = [
@@ -80,16 +159,77 @@ const INITIAL_CONTACTS: Contact[] = [
   },
 ];
 
-// Initial PC Apps
+// Initial PC & Mobile Apps (opens real phone apps or external URLs)
 const INITIAL_APPS: PCApp[] = [
   {
     id: 'whatsapp',
     name: 'WhatsApp',
     category: 'Communication',
     icon: '💬',
-    description: 'Instant Messaging & Voice gateway',
+    description: 'Open phone WhatsApp Messenger',
     status: 'running',
     url: 'https://web.whatsapp.com',
+    packageName: 'com.whatsapp',
+  },
+  {
+    id: 'youtube',
+    name: 'YouTube',
+    category: 'Media',
+    icon: '▶️',
+    description: 'Open phone YouTube App',
+    status: 'idle',
+    url: 'https://www.youtube.com',
+    packageName: 'com.google.android.youtube',
+  },
+  {
+    id: 'spotify',
+    name: 'Spotify Music',
+    category: 'Media',
+    icon: '🎵',
+    description: 'Open phone Spotify App',
+    status: 'idle',
+    url: 'https://open.spotify.com',
+    packageName: 'com.spotify.music',
+  },
+  {
+    id: 'instagram',
+    name: 'Instagram',
+    category: 'Communication',
+    icon: '📸',
+    description: 'Open phone Instagram App',
+    status: 'idle',
+    url: 'https://www.instagram.com',
+    packageName: 'com.instagram.android',
+  },
+  {
+    id: 'telegram',
+    name: 'Telegram',
+    category: 'Communication',
+    icon: '✈️',
+    description: 'Open phone Telegram App',
+    status: 'idle',
+    url: 'https://web.telegram.org',
+    packageName: 'org.telegram.messenger',
+  },
+  {
+    id: 'maps',
+    name: 'Google Maps',
+    category: 'Productivity',
+    icon: '🗺️',
+    description: 'Navigation & Maps',
+    status: 'idle',
+    url: 'https://maps.google.com',
+    packageName: 'com.google.android.apps.maps',
+  },
+  {
+    id: 'browser',
+    name: 'Chrome Browser',
+    category: 'Productivity',
+    icon: '🌐',
+    description: 'Web navigation & search',
+    status: 'running',
+    url: 'https://www.google.com',
+    packageName: 'com.android.chrome',
   },
   {
     id: 'terminal',
@@ -100,15 +240,6 @@ const INITIAL_APPS: PCApp[] = [
     status: 'running',
   },
   {
-    id: 'spotify',
-    name: 'Spotify Music',
-    category: 'Media',
-    icon: '🎵',
-    description: 'Stark Soundscapes & Media',
-    status: 'idle',
-    url: 'https://open.spotify.com',
-  },
-  {
     id: 'vscode',
     name: 'VS Code',
     category: 'Development',
@@ -116,15 +247,6 @@ const INITIAL_APPS: PCApp[] = [
     description: 'Code editor & AI workspace',
     status: 'idle',
     url: 'https://vscode.dev',
-  },
-  {
-    id: 'browser',
-    name: 'Chrome Browser',
-    category: 'Productivity',
-    icon: '🌐',
-    description: 'Web navigation & search',
-    status: 'running',
-    url: 'https://www.google.com',
   },
   {
     id: 'camera',
@@ -152,16 +274,37 @@ const INITIAL_APPS: PCApp[] = [
   },
 ];
 
+const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+  wakeWord: 'Jarvis',
+  continuousListening: true,
+  autoSpeakHindi: true,
+  speechRate: 0.95,
+  speechPitch: 0.98,
+  soundEffects: true,
+  autoOpenWhatsApp: true,
+  backgroundMode: true,
+  alwaysOnWakeWord: true,
+  personalityMode: 'balanced',
+  language: 'English',
+  languageCode: 'en-US',
+};
+
 export default function App() {
-  // Voice Settings & State
-  const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>({
-    wakeWord: 'Jarvis',
-    continuousListening: true,
-    autoSpeakHindi: true,
-    speechRate: 0.95,
-    speechPitch: 0.98,
-    soundEffects: true,
-    autoOpenWhatsApp: true,
+  // Voice Settings & State (persisted in localStorage)
+  const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(() => {
+    try {
+      const saved = localStorage.getItem('jarvis_voice_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_VOICE_SETTINGS,
+          ...parsed,
+          language: parsed.language || 'English',
+          languageCode: parsed.languageCode || 'en-US',
+        };
+      }
+    } catch {}
+    return DEFAULT_VOICE_SETTINGS;
   });
 
   const [isListening, setIsListening] = useState<boolean>(false);
@@ -169,8 +312,12 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [wakeWordDetected, setWakeWordDetected] = useState<boolean>(false);
   const [hudStatus, setHudStatus] = useState<string>('Online // Monitoring for "Jarvis"');
-  const [latestHindiVoice, setLatestHindiVoice] = useState<string>('नमस्ते सर, मैं जार्विस हूँ। आपके सभी आदेशों के लिए तैयार हूँ।');
-  const [latestEnglishAction, setLatestEnglishAction] = useState<string>('Jarvis Core 4.2.0 initialized. Awaiting commands.');
+  const [latestHindiVoice, setLatestHindiVoice] = useState<string>(
+    'Hello sir, I am JARVIS. All systems are online and ready for your commands.'
+  );
+  const [latestEnglishAction, setLatestEnglishAction] = useState<string>(
+    'Jarvis Core 4.3.0 initialized. Default language: English.'
+  );
 
   // System Hardware State
   const [systemState, setSystemState] = useState<SystemState>({
@@ -192,9 +339,18 @@ export default function App() {
   const [isLowBatteryDismissed, setIsLowBatteryDismissed] = useState<boolean>(false);
   const prevBatteryRef = useRef<number>(94);
 
-  // Data Collections
-  const [contacts, setContacts] = useState<Contact[]>(INITIAL_CONTACTS);
-  const [apps, setApps] = useState<PCApp[]>(INITIAL_APPS);
+  // Data Collections (persisted + device contacts sync on Android)
+  const [contacts, setContacts] = useState<Contact[]>(() => {
+    try {
+      const saved = localStorage.getItem('jarvis_contacts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_CONTACTS;
+  });
+  const [apps] = useState<PCApp[]>(INITIAL_APPS);
   const [commandLogs, setCommandLogs] = useState<CommandLog[]>([
     {
       id: 'cmd-init',
@@ -202,10 +358,10 @@ export default function App() {
       userQuery: 'Jarvis system boot sequence',
       intent: 'SYSTEM_DIAGNOSTIC',
       englishActionSummary: 'All PC hardware subsystems nominal. WhatsApp automation channel active.',
-      hindiVoiceReply: 'सिस्टम पूरी तरह से ऑनलाइन है सर, मैं आपकी सेवा में हाज़िर हूँ।',
+      hindiVoiceReply: 'All systems online, sir. Standing by for your instructions.',
       wakeWordDetected: true,
       status: 'completed',
-      quickFollowUps: ['Send WhatsApp to Mother', 'Check System Status', 'Set Volume to 50%'],
+      quickFollowUps: ['Open Spotify', 'Open YouTube', 'Turn to Hindi'],
     },
   ]);
 
@@ -214,7 +370,8 @@ export default function App() {
       id: 't-1',
       timestamp: new Date().toLocaleTimeString(),
       command: 'jarvis --init-core',
-      output: '[CORE] Stark MK-85 Neural Engine Online.\n[VOICE] Wake-word detector armed ("Jarvis").\n[SPEECH] Mode: Voice output in Hindi, Telemetry in English.',
+      output:
+        '[CORE] Stark MK-85 Neural Engine Online.\n[VOICE] Wake-word detector armed ("Jarvis").\n[SPEECH] Active Language: English (Say "Turn to Hindi" anytime to switch).',
       status: 'success',
     },
     {
@@ -251,13 +408,14 @@ export default function App() {
     jarvisAudio.enabled = voiceSettings.soundEffects;
   }, [voiceSettings.soundEffects]);
 
-  // Speak aloud in Hindi
+  // Speak aloud in active language (English by default, or switched language)
   const speakHindiVoice = useCallback(
-    (hindiText: string) => {
-      if (!voiceSettings.autoSpeakHindi || !hindiText) return;
+    (spokenText: string, overrideLangCode?: string) => {
+      if (!voiceSettings.autoSpeakHindi || !spokenText) return;
 
       setIsSpeaking(true);
-      jarvisSpeech.speakHindi(hindiText, {
+      jarvisSpeech.speakText(spokenText, {
+        langCode: overrideLangCode || voiceSettings.languageCode || 'en-US',
         rate: voiceSettings.speechRate,
         pitch: voiceSettings.speechPitch,
         preferredVoiceName: voiceSettings.preferredHindiVoiceName,
@@ -268,26 +426,104 @@ export default function App() {
     [voiceSettings]
   );
 
-  // Safe external link opener (avoids iframe popup issues)
-  const openExternalLink = useCallback((url: string) => {
-    const a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  // Sync Android phonebook contacts on startup & keep background service active
+  useEffect(() => {
+    const deviceContacts = loadDevicePhoneContacts();
+    if (deviceContacts.length > 0) {
+      setContacts((prev) => {
+        const existingPhones = new Set(prev.map((c) => c.phone.replace(/\D/g, '').slice(-10)));
+        const fresh = deviceContacts.filter(
+          (dc) => !existingPhones.has(dc.phone.replace(/\D/g, '').slice(-10))
+        );
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+    }
   }, []);
 
-  // Send WhatsApp message
+  useEffect(() => {
+    try {
+      localStorage.setItem('jarvis_voice_settings', JSON.stringify(voiceSettings));
+    } catch {}
+  }, [voiceSettings]);
+
+  useEffect(() => {
+    const bgEnabled = Boolean(voiceSettings.backgroundMode ?? true);
+    const alwaysOnEnabled = Boolean(voiceSettings.alwaysOnWakeWord ?? true);
+    toggleBackgroundKeepAlive(bgEnabled);
+    syncAssistantNativeConfig(
+      voiceSettings.wakeWord,
+      voiceSettings.languageCode || 'en-US',
+      bgEnabled,
+      alwaysOnEnabled
+    );
+    jarvisSpeech.setRecognitionLanguage(voiceSettings.languageCode || 'en-US');
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        if (bgEnabled) {
+          toggleBackgroundKeepAlive(true);
+        }
+        const pendingCmd = consumeNativePendingWakeCommand();
+        if (pendingCmd) {
+          const wakePattern = new RegExp(
+            `^(hey\\s+|hello\\s+|sun\\s+|arre\\s+)?(${voiceSettings.wakeWord}|jarvis)\\s*[:,-]?\\s*`,
+            'i'
+          );
+          const cleanPending = pendingCmd.replace(wakePattern, '').trim();
+          if (cleanPending) {
+            processJarvisCommandRef.current(cleanPending, true);
+          } else {
+            const isHindi = (voiceSettings.language || 'English') === 'Hindi';
+            const ackSpeech = isHindi ? 'जी सर!' : 'Yes sir!';
+            setWakeWordDetected(true);
+            jarvisAudio.playWakeWordDetected();
+            setHudStatus(`${ackSpeech} (Awaiting your command...)`);
+            setLatestHindiVoice(ackSpeech);
+            speakHindiVoiceRef.current(ackSpeech);
+          }
+        }
+      }
+    };
+
+    // Also check once on mount in case Android woke JARVIS from cold start
+    const initialPending = consumeNativePendingWakeCommand();
+    if (initialPending) {
+      setTimeout(() => {
+        const wakePattern = new RegExp(
+          `^(hey\\s+|hello\\s+|sun\\s+|arre\\s+)?(${voiceSettings.wakeWord}|jarvis)\\s*[:,-]?\\s*`,
+          'i'
+        );
+        const cleanInitial = initialPending.replace(wakePattern, '').trim();
+        if (cleanInitial) {
+          processJarvisCommandRef.current(cleanInitial, true);
+        }
+      }, 450);
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [
+    voiceSettings.backgroundMode,
+    voiceSettings.alwaysOnWakeWord,
+    voiceSettings.wakeWord,
+    voiceSettings.languageCode,
+    voiceSettings.language,
+  ]);
+
+  // Safe external link opener (Android Intent or Browser new tab)
+  const openExternalLink = useCallback((url: string) => {
+    openExternalWebOrApp(url);
+  }, []);
+
+  // Send WhatsApp message directly in phone WhatsApp / WhatsApp Web
   const handleDispatchWhatsApp = useCallback(
     (phone: string, text: string, contactName: string) => {
       const cleanPhone = phone.replace(/[^0-9]/g, '');
-      const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
 
-      // Execute on client: open in new tab or WhatsApp desktop
       if (voiceSettings.autoOpenWhatsApp) {
-        openExternalLink(url);
+        dispatchNativeWhatsApp(phone, text);
       }
 
       setTerminalLogs((prev) => [
@@ -295,7 +531,7 @@ export default function App() {
           id: `t-${Date.now()}`,
           timestamp: new Date().toLocaleTimeString(),
           command: `whatsapp --send "${contactName}" "${text}"`,
-          output: `[WHATSAPP DISPATCH] Recipient: ${contactName} (${cleanPhone})\nMessage: "${text}"\nStatus: Hook delivered to WhatsApp Web.`,
+          output: `[WHATSAPP DISPATCH] Recipient: ${contactName} (${cleanPhone})\nMessage: "${text}"\nStatus: Launched in WhatsApp.`,
           status: 'success',
         },
         ...prev,
@@ -304,9 +540,79 @@ export default function App() {
     [voiceSettings.autoOpenWhatsApp]
   );
 
-  const isProcessingRef = useRef<boolean>(false);
+  // Place real phone call via Android Dialer/Call Intent or tel: URI
+  const handleMakePhoneCall = useCallback((phone: string, contactName: string) => {
+    jarvisAudio.playTaskSuccess();
+    makeNativePhoneCall(phone);
 
-  // Process command through Gemini API endpoint
+    setTerminalLogs((prev) => [
+      {
+        id: `t-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        command: `phone --call "${contactName}" (${phone})`,
+        output: `[PHONE DIALER] Calling ${contactName} at ${phone}...`,
+        status: 'success',
+      },
+      ...prev,
+    ]);
+  }, []);
+
+  // Camera preview handling
+  const startCamera = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setIsCameraActive(true);
+      }
+    } catch (err) {
+      console.warn('Camera access denied or unavailable:', err);
+    }
+  }, []);
+
+  // Launch Phone or Desktop App (opens real WhatsApp, YouTube, Spotify, Chrome, etc. outside Jarvis)
+  const handleLaunchApp = useCallback(
+    (appId: string) => {
+      jarvisAudio.playTerminalTick();
+      setSystemState((s) => ({ ...s, activeAppId: appId }));
+
+      if (appId === 'terminal') {
+        setActiveTab('terminal');
+      } else if (appId === 'camera') {
+        setActiveOverlayApp('camera');
+        startCamera();
+      } else if (appId === 'calculator') {
+        setActiveOverlayApp('calculator');
+      } else if (appId === 'settings') {
+        setIsSettingsOpen(true);
+      } else {
+        const app = apps.find((a) => a.id === appId);
+        if (app) {
+          openPhoneApp(app.packageName, app.url);
+        } else {
+          openPhoneApp(undefined, `https://www.google.com/search?q=${encodeURIComponent(appId)}`);
+        }
+      }
+
+      setTerminalLogs((prev) => [
+        {
+          id: `t-${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString(),
+          command: `launch --app ${appId}`,
+          output: `[OS APP LAUNCHER] Launched "${appId.toUpperCase()}" externally on device.`,
+          status: 'info',
+        },
+        ...prev,
+      ]);
+    },
+    [apps, startCamera]
+  );
+
+  const isProcessingRef = useRef<boolean>(false);
+  const commandLogsRef = useRef<CommandLog[]>(commandLogs);
+  commandLogsRef.current = commandLogs;
+
+  // Process command through Gemini API endpoint (or offline fallback)
   const processJarvisCommand = useCallback(
     async (commandText: string, wakeTriggered: boolean = false) => {
       const clean = commandText.trim();
@@ -318,6 +624,18 @@ export default function App() {
       jarvisAudio.playTerminalTick();
 
       try {
+        const recentHistory = commandLogsRef.current
+          .slice(0, 5)
+          .reverse()
+          .map((l) => ({
+            user: l.userQuery,
+            assistantEnglish: l.englishActionSummary,
+            assistantHindi: l.hindiVoiceReply,
+          }));
+
+        const activeLang = voiceSettings.language || 'English';
+        const activeLangCode = voiceSettings.languageCode || 'en-US';
+
         let data: any = null;
         try {
           const apiBase = getJarvisApiBaseUrl();
@@ -329,6 +647,10 @@ export default function App() {
               contacts,
               currentSystemState: systemState,
               customWakeWord: voiceSettings.wakeWord,
+              personalityMode: voiceSettings.personalityMode || 'balanced',
+              activeLanguage: activeLang,
+              activeLanguageCode: activeLangCode,
+              conversationHistory: recentHistory,
             }),
           });
 
@@ -340,28 +662,46 @@ export default function App() {
         }
 
         if (!data) {
-          data = parseCommandLocallyClient(commandText, voiceSettings.wakeWord, contacts);
+          data = parseCommandLocallyClient(
+            commandText,
+            voiceSettings.wakeWord,
+            contacts,
+            voiceSettings.personalityMode || 'balanced',
+            activeLang,
+            activeLangCode
+          );
         }
 
         const {
           intent = 'GENERAL_CONVERSATION',
           englishActionSummary = `Processed command: "${clean}"`,
-          hindiVoiceReply = 'जी सर, आपका आदेश पूरा किया गया है।',
+          hindiVoiceReply =
+            activeLang === 'Hindi'
+              ? 'जी सर, आपका आदेश पूरा किया गया है।'
+              : 'Yes sir, your command has been processed.',
           actionPayload = {},
           quickFollowUps = [],
         } = data;
+
+        let targetLangCodeForSpeech: string | undefined;
+        if (intent === 'SET_LANGUAGE' && actionPayload?.targetLanguage) {
+          const nextLang = String(actionPayload.targetLanguage);
+          const nextCode = String(actionPayload.targetLanguageCode || 'en-US');
+          targetLangCodeForSpeech = nextCode;
+          setVoiceSettings((prev) => ({
+            ...prev,
+            language: nextLang,
+            languageCode: nextCode,
+          }));
+        }
 
         setLatestEnglishAction(englishActionSummary);
         setLatestHindiVoice(hindiVoiceReply);
         setHudStatus('Task Executed Successfully');
 
-        // Play confirmation sound
         jarvisAudio.playTaskSuccess();
+        speakHindiVoice(hindiVoiceReply, targetLangCodeForSpeech);
 
-        // Speak Hindi response aloud
-        speakHindiVoice(hindiVoiceReply);
-
-        // Record in command log
         const newLog: CommandLog = {
           id: `cmd-${Date.now()}`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -376,26 +716,44 @@ export default function App() {
         };
         setCommandLogs((prev) => [newLog, ...prev]);
 
-        // Execute specific automated actions on the PC & UI:
-        if (intent === 'WHATSAPP_SEND') {
-          setActiveTab('whatsapp');
-          const target = actionPayload.target || 'Mother';
-          const matchedContact = contacts.find(
-            (c) =>
-              c.relation.toLowerCase() === target.toLowerCase() ||
-              c.name.toLowerCase().includes(target.toLowerCase())
-          ) || contacts[0];
+        // Resolve matching contact helper
+        const resolveContact = (targetStr: string) => {
+          const t = String(targetStr || '').toLowerCase();
+          return (
+            contacts.find(
+              (c) =>
+                c.relation.toLowerCase() === t ||
+                c.name.toLowerCase() === t ||
+                c.name.toLowerCase().includes(t) ||
+                (t.includes('mom') && c.relation.toLowerCase() === 'mother') ||
+                (t.includes('dad') && c.relation.toLowerCase() === 'father')
+            ) || contacts[0]
+          );
+        };
 
-          const messageBody = actionPayload.message || 'Hello, I am contacting you via Jarvis AI.';
+        if (intent === 'CALL_CONTACT') {
+          const target = actionPayload.target || 'Mother';
+          const matchedContact = resolveContact(target);
+          const phoneToCall = actionPayload.recipientPhone || matchedContact?.phone || '+919876543210';
+          const displayName = matchedContact?.name || matchedContact?.relation || target;
+          handleMakePhoneCall(phoneToCall, displayName);
+        } else if (intent === 'WHATSAPP_SEND') {
+          const target = actionPayload.target || 'Mother';
+          const matchedContact = resolveContact(target);
+          const phoneToMsg = actionPayload.recipientPhone || matchedContact?.phone || '+919876543210';
+          const displayName = matchedContact?.relation || matchedContact?.name || target;
+          const messageBody = actionPayload.message || 'Hello, contacting you via Jarvis AI.';
+
           setWhatsAppDraft({
-            recipientName: matchedContact.relation || matchedContact.name,
-            recipientPhone: matchedContact.phone,
+            recipientName: displayName,
+            recipientPhone: phoneToMsg,
             message: messageBody,
           });
 
-          // If autoOpenWhatsApp is active, dispatch immediately
           if (voiceSettings.autoOpenWhatsApp) {
-            handleDispatchWhatsApp(matchedContact.phone, messageBody, matchedContact.relation);
+            handleDispatchWhatsApp(phoneToMsg, messageBody, displayName);
+          } else {
+            setActiveTab('whatsapp');
           }
         } else if (intent === 'SYSTEM_VOLUME') {
           if (typeof actionPayload.volumeLevel === 'number') {
@@ -418,9 +776,7 @@ export default function App() {
               a.id.toLowerCase() === appName.toLowerCase() ||
               a.name.toLowerCase().includes(appName.toLowerCase())
           );
-          if (matchApp) {
-            handleLaunchApp(matchApp.id);
-          }
+          handleLaunchApp(matchApp ? matchApp.id : appName.toLowerCase());
         } else if (intent === 'SYSTEM_TERMINAL') {
           setActiveTab('terminal');
           setTerminalLogs((prev) => [
@@ -436,16 +792,20 @@ export default function App() {
         }
       } catch (err) {
         console.error('Command processing error:', err);
+        const isHindi = (voiceSettings.language || 'English') === 'Hindi';
+        const errSpeech = isHindi
+          ? 'क्षमा करें सर, कमांड को प्रोसेस करने में कुछ समस्या आई है।'
+          : 'Sorry sir, there was an issue processing that command.';
         setHudStatus('Neural Link Error');
         setLatestEnglishAction('Command execution could not be routed to AI backend.');
-        setLatestHindiVoice('क्षमा करें सर, कमांड को प्रोसेस करने में कुछ समस्या आई है।');
-        speakHindiVoice('क्षमा करें सर, कमांड को प्रोसेस करने में कुछ समस्या आई है।');
+        setLatestHindiVoice(errSpeech);
+        speakHindiVoice(errSpeech);
       } finally {
         isProcessingRef.current = false;
         setIsProcessing(false);
       }
     },
-    [contacts, systemState, voiceSettings, apps, speakHindiVoice, handleDispatchWhatsApp]
+    [contacts, systemState, voiceSettings, apps, speakHindiVoice, handleDispatchWhatsApp, handleMakePhoneCall, handleLaunchApp]
   );
 
   // Stable references for continuous speech callbacks to prevent auto on/off toggling
@@ -476,15 +836,16 @@ export default function App() {
 
         // If the user ONLY said "Hey Jarvis" or "Jarvis" without a question:
         if (!cleanCommand) {
+          const isHindi = (voiceSettings.language || 'English') === 'Hindi';
+          const ackSpeech = isHindi ? 'जी सर!' : 'Yes sir!';
           isAwaitingQuestionRef.current = true;
           setWakeWordDetected(true);
           jarvisAudio.playWakeWordDetected();
-          setHudStatus('जी सर! (Awaiting your question...)');
-          setLatestHindiVoice('जी सर!');
-          setLatestEnglishAction('Jarvis armed: "Ji Sir!". Listening for your question...');
+          setHudStatus(`${ackSpeech} (Awaiting your command...)`);
+          setLatestHindiVoice(ackSpeech);
+          setLatestEnglishAction(`Jarvis armed: "${ackSpeech}". Listening for your command...`);
 
-          // Speak "जी सर!" aloud in Hindi as requested by user
-          speakHindiVoiceRef.current('जी सर!');
+          speakHindiVoiceRef.current(ackSpeech);
 
           clearTimeout(awaitingQuestionTimerRef.current);
           awaitingQuestionTimerRef.current = setTimeout(() => {
@@ -512,7 +873,7 @@ export default function App() {
     return () => {
       jarvisSpeech.stopListening();
     };
-  }, [voiceSettings.wakeWord, voiceSettings.continuousListening]);
+  }, [voiceSettings.wakeWord, voiceSettings.continuousListening, voiceSettings.language]);
 
   // Toggle Microphone
   const toggleListening = () => {
@@ -528,54 +889,6 @@ export default function App() {
         jarvisAudio.playWakeWordDetected();
         setHudStatus(`Listening for "${voiceSettings.wakeWord}"...`);
       }
-    }
-  };
-
-  // Launch PC App
-  const handleLaunchApp = (appId: string) => {
-    jarvisAudio.playTerminalTick();
-    setSystemState((s) => ({ ...s, activeAppId: appId }));
-
-    if (appId === 'whatsapp') {
-      setActiveTab('whatsapp');
-    } else if (appId === 'terminal') {
-      setActiveTab('terminal');
-    } else if (appId === 'camera') {
-      setActiveOverlayApp('camera');
-      startCamera();
-    } else if (appId === 'calculator') {
-      setActiveOverlayApp('calculator');
-    } else if (appId === 'settings') {
-      setIsSettingsOpen(true);
-    } else {
-      const app = apps.find((a) => a.id === appId);
-      if (app?.url) {
-        openExternalLink(app.url);
-      }
-    }
-
-    setTerminalLogs((prev) => [
-      {
-        id: `t-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString(),
-        command: `launch --app ${appId}`,
-        output: `[OS APP LAUNCHER] Target "${appId.toUpperCase()}" brought to foreground.`,
-        status: 'info',
-      },
-      ...prev,
-    ]);
-  };
-
-  // Camera preview handling
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsCameraActive(true);
-      }
-    } catch (err) {
-      console.warn('Camera access denied or unavailable:', err);
     }
   };
 
@@ -596,13 +909,15 @@ export default function App() {
   };
 
   const handleUnlockScreen = () => {
+    const isHindi = (voiceSettings.language || 'English') === 'Hindi';
     setSystemState((s) => ({ ...s, isScreenLocked: false }));
     jarvisAudio.playTaskSuccess();
-    speakHindiVoice('सिस्टम अनलॉक कर दिया गया है सर। आपका स्वागत है।');
+    speakHindiVoice(isHindi ? 'सिस्टम अनलॉक कर दिया गया है सर। आपका स्वागत है।' : 'System unlocked, sir. Welcome back.');
   };
 
   // Memory Boost
   const handleBoostMemory = () => {
+    const isHindi = (voiceSettings.language || 'English') === 'Hindi';
     setSystemState((s) => ({
       ...s,
       memoryUsage: 22,
@@ -619,11 +934,19 @@ export default function App() {
       },
       ...prev,
     ]);
-    speakHindiVoice('रैम कैशे साफ़ कर दिया गया है सर। सिस्टम परफॉर्मेंस ऑप्टिमाइज़ हो चुकी है।');
+    speakHindiVoice(
+      isHindi
+        ? 'रैम कैशे साफ़ कर दिया गया है सर। सिस्टम परफॉर्मेंस ऑप्टिमाइज़ हो चुकी है।'
+        : 'RAM cache cleared, sir. System performance is now optimized.'
+    );
   };
 
   // Power-Saving Mode Activation
   const handleActivatePowerSaving = useCallback(() => {
+    const isHindi = (voiceSettings.language || 'English') === 'Hindi';
+    const voiceLine = isHindi
+      ? 'जी सर, पावर-सेविंग मोड सक्रिय कर दिया गया है। ऊर्जा खपत अब न्यूनतम स्तर पर है।'
+      : 'Yes sir, power-saving mode is now active. Energy usage is minimized.';
     setSystemState((s) => ({
       ...s,
       isPowerSavingMode: true,
@@ -634,8 +957,8 @@ export default function App() {
     jarvisAudio.playTaskSuccess();
     setHudStatus('Power-Saving Mode Engaged');
     setLatestEnglishAction('Power-saving mode active: Luminance throttled to 20%, background CPU load capped.');
-    setLatestHindiVoice('जी सर, पावर-सेविंग मोड सक्रिय कर दिया गया है। ऊर्जा खपत अब न्यूनतम स्तर पर है।');
-    speakHindiVoice('जी सर, पावर-सेविंग मोड सक्रिय कर दिया गया है। ऊर्जा खपत अब न्यूनतम स्तर पर है।');
+    setLatestHindiVoice(voiceLine);
+    speakHindiVoice(voiceLine);
     setTerminalLogs((prev) => [
       {
         id: `t-${Date.now()}`,
@@ -646,11 +969,15 @@ export default function App() {
       },
       ...prev,
     ]);
-  }, [speakHindiVoice]);
+  }, [speakHindiVoice, voiceSettings.language]);
 
   // Toggle Power-Saving Mode
   const handleTogglePowerSaving = useCallback(() => {
+    const isHindi = (voiceSettings.language || 'English') === 'Hindi';
     if (systemState.isPowerSavingMode) {
+      const voiceLine = isHindi
+        ? 'पावर-सेविंग मोड बंद कर दिया गया है सर, सामान्य ऊर्जा स्तर बहाल है।'
+        : 'Power-saving mode disabled, sir. Normal power profile restored.';
       setSystemState((s) => ({
         ...s,
         isPowerSavingMode: false,
@@ -660,15 +987,19 @@ export default function App() {
       jarvisAudio.playHardwareTick();
       setHudStatus('Standard Power Profile Restored');
       setLatestEnglishAction('Standard power profile restored. Luminance set to 85%.');
-      setLatestHindiVoice('पावर-सेविंग मोड बंद कर दिया गया है सर, सामान्य ऊर्जा स्तर बहाल है।');
-      speakHindiVoice('पावर-सेविंग मोड बंद कर दिया गया है सर, सामान्य ऊर्जा स्तर बहाल है।');
+      setLatestHindiVoice(voiceLine);
+      speakHindiVoice(voiceLine);
     } else {
       handleActivatePowerSaving();
     }
-  }, [systemState.isPowerSavingMode, handleActivatePowerSaving, speakHindiVoice]);
+  }, [systemState.isPowerSavingMode, handleActivatePowerSaving, speakHindiVoice, voiceSettings.language]);
 
   // Simulate Battery Recharge
   const handleSimulateRecharge = useCallback(() => {
+    const isHindi = (voiceSettings.language || 'English') === 'Hindi';
+    const voiceLine = isHindi
+      ? 'आर्क रिएक्टर पुनः चार्ज हो चुका है सर, बैटरी स्तर 95% है।'
+      : 'Arc reactor recharged, sir. Battery level is at 95%.';
     setSystemState((s) => ({
       ...s,
       batteryLevel: 95,
@@ -680,8 +1011,8 @@ export default function App() {
     jarvisAudio.playTaskSuccess();
     setHudStatus('Arc Reactor Recharged');
     setLatestEnglishAction('Power core recharged to 95%. Normal operations resumed.');
-    setLatestHindiVoice('आर्क रिएक्टर पुनः चार्ज हो चुका है सर, बैटरी स्तर 95% है।');
-    speakHindiVoice('आर्क रिएक्टर पुनः चार्ज हो चुका है सर, बैटरी स्तर 95% है।');
+    setLatestHindiVoice(voiceLine);
+    speakHindiVoice(voiceLine);
     setTerminalLogs((prev) => [
       {
         id: `t-${Date.now()}`,
@@ -692,36 +1023,46 @@ export default function App() {
       },
       ...prev,
     ]);
-  }, [speakHindiVoice]);
+  }, [speakHindiVoice, voiceSettings.language]);
 
   // Battery Level Setter (e.g. for testing low battery)
   const handleSetBatteryLevel = useCallback(
     (lvl: number) => {
+      const isHindi = (voiceSettings.language || 'English') === 'Hindi';
       setSystemState((s) => ({ ...s, batteryLevel: lvl }));
       if (lvl < 15) {
         setIsLowBatteryDismissed(false);
         jarvisAudio.playEmergencyWarning();
-        speakHindiVoice('चेतावनी सर: सिस्टम बैटरी 15% से कम हो चुकी है। क्या मैं पावर-सेविंग मोड सक्रिय कर दूँ?');
+        speakHindiVoice(
+          isHindi
+            ? 'चेतावनी सर: सिस्टम बैटरी 15% से कम हो चुकी है। क्या मैं पावर-सेविंग मोड सक्रिय कर दूँ?'
+            : 'Warning sir: system battery is below 15%. Shall I activate power-saving mode?'
+        );
         setHudStatus(`CRITICAL POWER WARNING: ${lvl}%`);
       }
     },
-    [speakHindiVoice]
+    [speakHindiVoice, voiceSettings.language]
   );
 
   // Monitor battery drops below 15% to trigger alert overlay
   useEffect(() => {
+    const isHindi = (voiceSettings.language || 'English') === 'Hindi';
     if (systemState.batteryLevel < 15) {
       if (prevBatteryRef.current >= 15) {
         setIsLowBatteryDismissed(false);
         jarvisAudio.playEmergencyWarning();
-        speakHindiVoice('चेतावनी सर: सिस्टम बैटरी 15% से कम हो चुकी है। क्या मैं पावर-सेविंग मोड सक्रिय कर दूँ?');
+        speakHindiVoice(
+          isHindi
+            ? 'चेतावनी सर: सिस्टम बैटरी 15% से कम हो चुकी है। क्या मैं पावर-सेविंग मोड सक्रिय कर दूँ?'
+            : 'Warning sir: system battery is below 15%. Shall I activate power-saving mode?'
+        );
         setHudStatus(`CRITICAL POWER WARNING: ${systemState.batteryLevel}%`);
       }
     } else {
       setIsLowBatteryDismissed(false);
     }
     prevBatteryRef.current = systemState.batteryLevel;
-  }, [systemState.batteryLevel, speakHindiVoice]);
+  }, [systemState.batteryLevel, speakHindiVoice, voiceSettings.language]);
 
   return (
     <div
@@ -761,7 +1102,7 @@ export default function App() {
               <span>WAKE:</span>
               <strong className="text-cyan-400 font-bold uppercase">"{voiceSettings.wakeWord}"</strong>
               <span>|</span>
-              <span className="text-emerald-400">VOICE: HINDI</span>
+              <span className="text-emerald-400">VOICE: {(voiceSettings.language || 'English').toUpperCase()}</span>
               <span>|</span>
               <span className="text-slate-300">LOGS: ENGLISH</span>
             </p>
@@ -826,6 +1167,29 @@ export default function App() {
               <span>ECO POWER (20%)</span>
             </button>
           )}
+
+          {/* Always-On Background Assistant Setup / Quick Status */}
+          <button
+            onClick={() => {
+              jarvisAudio.playTerminalTick();
+              setIsSettingsOpen(true);
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-mono font-bold transition-all cursor-pointer ${
+              voiceSettings.backgroundMode && (voiceSettings.alwaysOnWakeWord ?? true)
+                ? 'border-emerald-500/50 bg-emerald-950/60 text-emerald-300 hover:bg-emerald-900/50'
+                : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
+            }`}
+            title="Configure Always-On Background Wake-Up (like Google Assistant) & Default Assistant permissions"
+          >
+            <Radio className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">
+              {voiceSettings.backgroundMode && (voiceSettings.alwaysOnWakeWord ?? true)
+                ? 'ALWAYS-ON BG'
+                : voiceSettings.backgroundMode
+                ? 'BG ACTIVE'
+                : 'BG OFF'}
+            </span>
+          </button>
 
           {/* Hands-Free Mic Quick Toggle */}
           <button
@@ -921,13 +1285,14 @@ export default function App() {
             TRY SAYING:
           </span>
           {[
-            'Jarvis send message to my mother: reach home safe',
-            'Jarvis set volume to 80%',
-            'Jarvis mute sound',
-            'Jarvis open terminal',
-            'Jarvis launch Spotify',
-            'Jarvis run system diagnostics',
-            'Jarvis dim brightness to 30%',
+            'Jarvis open Spotify',
+            'Jarvis open YouTube',
+            'Jarvis open WhatsApp',
+            'Jarvis call my mother',
+            'Jarvis send message to my dad: reaching soon',
+            'Jarvis turn to Hindi',
+            'Jarvis turn back to English',
+            'Jarvis tell me a joke like a friend',
           ].map((promptText, i) => (
             <button
               key={i}
@@ -954,6 +1319,7 @@ export default function App() {
                 statusText={hudStatus}
                 hindiSpeechText={latestHindiVoice}
                 englishActionText={latestEnglishAction}
+                activeLanguage={voiceSettings.language || 'English'}
               />
 
               {/* Hardware Quick Ticker */}
@@ -999,19 +1365,29 @@ export default function App() {
                 onPlayHindiSpeech={speakHindiVoice}
                 onSelectQuickAction={(cmd) => processJarvisCommand(cmd, false)}
                 onClearLogs={() => setCommandLogs([])}
+                activeLanguage={voiceSettings.language || 'English'}
               />
             </div>
           </div>
         )}
 
-        {/* Tab 2: WhatsApp Automation Gateway */}
+        {/* Tab 2: WhatsApp & Calling Gateway */}
         {activeTab === 'whatsapp' && (
           <WhatsAppAutomationModal
             contacts={contacts}
-            onAddContact={(newC) => setContacts((prev) => [newC, ...prev])}
+            onAddContact={(newC) =>
+              setContacts((prev) => {
+                const updated = [newC, ...prev];
+                try {
+                  localStorage.setItem('jarvis_contacts', JSON.stringify(updated));
+                } catch {}
+                return updated;
+              })
+            }
             activeDraft={whatsAppDraft}
             onClearDraft={() => setWhatsAppDraft(null)}
             onDispatchMessage={handleDispatchWhatsApp}
+            onCallContact={handleMakePhoneCall}
           />
         )}
 
@@ -1194,8 +1570,7 @@ export default function App() {
                       setCalcInput('0');
                     } else if (btn === '=') {
                       try {
-                        // eslint-disable-next-line no-eval
-                        const res = Function(`"use strict"; return (${calcInput})`)();
+                        const res = evaluateMathExpression(calcInput);
                         setCalcInput(String(res));
                       } catch {
                         setCalcInput('Error');

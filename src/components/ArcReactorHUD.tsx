@@ -12,6 +12,7 @@ interface ArcReactorHUDProps {
   statusText: string;
   hindiSpeechText?: string;
   englishActionText?: string;
+  activeLanguage?: string;
 }
 
 export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
@@ -24,6 +25,7 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
   statusText,
   hindiSpeechText,
   englishActionText,
+  activeLanguage = 'English',
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -122,7 +124,7 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
             <span>WAKE WORD: <strong className="text-cyan-300 font-bold uppercase tracking-wider">"{wakeWord}"</strong></span>
           </span>
           <span className="hidden sm:inline text-slate-500">|</span>
-          <span className="hidden sm:inline text-slate-400">OUTPUT: HINDI VOICE / ENGLISH LOGS</span>
+          <span className="hidden sm:inline text-slate-400">OUTPUT: {activeLanguage.toUpperCase()} VOICE / ENGLISH LOGS</span>
         </div>
       </div>
 
@@ -213,7 +215,7 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
             <Volume2 className="w-4 h-4 text-cyan-400 mt-0.5 shrink-0 animate-pulse" />
             <div>
               <div className="text-[10px] font-mono uppercase tracking-wider text-cyan-400/70 mb-0.5">
-                JARVIS VOICE RESPONSE (HINDI):
+                JARVIS VOICE RESPONSE ({activeLanguage.toUpperCase()}):
               </div>
               <div className="text-base text-cyan-100 font-sans leading-relaxed">
                 "{hindiSpeechText}"

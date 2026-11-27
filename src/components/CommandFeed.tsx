@@ -8,6 +8,7 @@ interface CommandFeedProps {
   onPlayHindiSpeech: (speechText: string) => void;
   onSelectQuickAction?: (actionText: string) => void;
   onClearLogs?: () => void;
+  activeLanguage?: string;
 }
 
 export const CommandFeed: React.FC<CommandFeedProps> = ({
@@ -15,6 +16,7 @@ export const CommandFeed: React.FC<CommandFeedProps> = ({
   onPlayHindiSpeech,
   onSelectQuickAction,
   onClearLogs,
+  activeLanguage = 'English',
 }) => {
   if (logs.length === 0) {
     return (
@@ -100,13 +102,13 @@ export const CommandFeed: React.FC<CommandFeedProps> = ({
                         onPlayHindiSpeech(log.hindiVoiceReply);
                       }}
                       className="p-1 rounded bg-cyan-900/60 hover:bg-cyan-800 text-cyan-300 transition-colors shrink-0 mt-0.5"
-                      title="Listen to Hindi Voice reply"
+                      title="Listen to voice reply"
                     >
                       <Volume2 className="w-3.5 h-3.5" />
                     </button>
                     <div>
                       <div className="text-[10px] font-mono text-cyan-400/80 uppercase tracking-wider">
-                        JARVIS VOICE REPLY (HINDI):
+                        JARVIS VOICE REPLY ({activeLanguage.toUpperCase()}):
                       </div>
                       <div className="text-cyan-100 font-sans text-sm font-medium mt-0.5">
                         "{log.hindiVoiceReply}"
