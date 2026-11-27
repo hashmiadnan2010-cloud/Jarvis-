@@ -1093,7 +1093,7 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public boolean startNativeListening() {
             if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                requestJarvisPermissions();
+                runOnUiThread(MainActivity.this::requestJarvisPermissions);
                 return false;
             }
             try {
