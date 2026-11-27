@@ -27,13 +27,23 @@ for (const perm of permissions) {
   }
 }
 
-// Ensure MainActivity supports lock-screen wake-up & singleTask launch
-if (!manifest.includes('android:showWhenLocked="true"')) {
-  manifest = manifest.replace(
-    /(<activity[^>]*android:name="[^"]*MainActivity"[^>]*)(>)/,
-    '$1\n            android:launchMode="singleTask"\n            android:showWhenLocked="true"\n            android:turnScreenOn="true"$2'
-  );
-}
+// Ensure MainActivity supports lock-screen wake-up & singleTask launch without duplicating existing attributes
+manifest = manifest.replace(
+  /(<activity[^>]*android:name="[^"]*MainActivity"[^>]*)(>)/,
+  (match, openTag, closeBracket) => {
+    let additions = '';
+    if (!/android:launchMode=/.test(openTag)) {
+      additions += '\n            android:launchMode="singleTask"';
+    }
+    if (!/android:showWhenLocked=/.test(openTag)) {
+      additions += '\n            android:showWhenLocked="true"';
+    }
+    if (!/android:turnScreenOn=/.test(openTag)) {
+      additions += '\n            android:turnScreenOn="true"';
+    }
+    return `${openTag}${additions}${closeBracket}`;
+  }
+);
 
 // Register MainActivity as a selectable Android Digital Assistant App (ACTION_ASSIST & VOICE_COMMAND)
 if (!manifest.includes('android.intent.action.ASSIST')) {
