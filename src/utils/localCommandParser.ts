@@ -13,44 +13,287 @@ export function getJarvisApiBaseUrl(): string {
   return '';
 }
 
-function matchContactClient(lower: string, contacts: Contact[] = []) {
-  const isMotherAlias = /\b(mom|mama|mummy|mata|mataji|mother|maa)\b|माँ|मम्मी|माता/.test(lower);
-  const isFatherAlias = /\b(dad|daddy|papa|pita|pitaji|father|pa)\b|पापा|पिता/.test(lower);
+export function getJarvisApiBaseUrls(): string[] {
+  if (typeof window === 'undefined') return [''];
+  const { protocol, hostname, port } = window.location;
+  const isCapacitorNative =
+    protocol === 'capacitor:' ||
+    (hostname === 'localhost' && port !== '3000');
 
-  for (const c of contacts) {
-    const rel = String(c.relation || '').toLowerCase();
-    const name = String(c.name || '').toLowerCase();
+  if (isCapacitorNative) {
+    return [
+      'https://ais-pre-p4jos3plr3cl67xao2hvll-109399473900.asia-northeast1.run.app',
+      'https://ais-dev-p4jos3plr3cl67xao2hvll-109399473900.asia-northeast1.run.app',
+    ];
+  }
+  return [''];
+}
+
+export function isDirectClockQuery(command: string): boolean {
+  const lower = command.toLowerCase().trim();
+  const hasTopicSuffix = /\b(to\s+visit|in\s+history|of\s+the\s+year|for\s+|movie|anime|game|release|born)\b/.test(lower);
+  if (hasTopicSuffix) return false;
+  return (
+    /\b(what(?:'s| is)\s+(?:the\s+)?(?:current\s+)?(?:time|date|day)|tell\s+me\s+(?:the\s+)?(?:date|day|time)|date\s+(?:and|&)\s+day|day\s+(?:and|&)\s+date|today(?:'s)?\s+(?:date|day)|current\s+time)\b/.test(lower) ||
+    /^(?:date|day|time|today|aaj\s+(?:kya\s+)?(?:tarikh|taarikh|din)|abhi\s+(?:kya\s+)?(?:time|samay)|kitne\s+baje)/.test(lower) ||
+    /(?:tarikh|taarikh|kaun\s+sa\s+din|kya\s+din|samay\s+kya|baje\s+hai)/.test(lower)
+  );
+}
+
+export function isHighConfidenceFastAction(command: string, parsedLocal: { intent?: string; actionPayload?: { searchQuery?: string } }): boolean {
+  const lower = command.toLowerCase().trim();
+  const intent = parsedLocal?.intent || 'GENERAL_CONVERSATION';
+  if (intent === 'SET_LANGUAGE' || intent === 'DEVICE_SETTING') return true;
+  if (intent === 'LAUNCH_APP') {
+    return /\b(open|launch|start|kholo|chalu|play)\b|खोलो|चलाओ|चालू/i.test(lower);
+  }
+  if (intent === 'SEARCH_WEB') {
+    return Boolean(parsedLocal?.actionPayload?.searchQuery);
+  }
+  if (intent === 'CALL_CONTACT') {
+    return !/\b(what|why|how|who|when|which|explain)\b|क्या|क्यों|कैसे/.test(lower);
+  }
+  if (intent === 'WHATSAPP_SEND') {
+    return (
+      (/\b(whatsapp|whatsap|send|message|text|bhej|bhejo|sandesh)\b/.test(lower) ||
+        /व्हाट्सएप|वॉट्सएप|वाट्सएप|मैसेज|संदेश|भेजो|भेज/.test(command)) &&
+      !/\b(what\s+is|why|how\s+does|explain)\b/.test(lower)
+    );
+  }
+  if (intent === 'SYSTEM_VOLUME' || intent === 'SYSTEM_BRIGHTNESS' || intent === 'SYSTEM_TERMINAL' || intent === 'SYSTEM_DIAGNOSTIC') {
+    return !/\b(why|explain|how\s+does|definition|meaning)\b/.test(lower);
+  }
+  if (intent === 'GENERAL_CONVERSATION') {
+    return isDirectClockQuery(command);
+  }
+  return false;
+}
+
+function resolveDeviceSettingClient(lower: string): {
+  settingType: string;
+  settingAction: 'on' | 'off' | 'toggle' | 'open' | 'vibrate' | 'silent' | 'normal';
+  ringerMode?: 'normal' | 'vibrate' | 'silent';
+  label: string;
+} | null {
+  const wantsOff = /\b(off|disable|band|close|stop)\b/.test(lower);
+  const wantsOn = /\b(on|enable|chalu|start)\b/.test(lower);
+  const hasActionVerb = wantsOn || wantsOff || /\b(switch|turn|toggle|connect|open|kholo|karo|settings?)\b/.test(lower);
+  const onOff: 'on' | 'off' | 'open' = wantsOff ? 'off' : wantsOn ? 'on' : 'open';
+
+  if (/\b(vibrat(?:e|ion)|vibration\s*mode|vibrate\s*mode)\b/.test(lower)) {
+    return { settingType: 'ringer', settingAction: 'vibrate', ringerMode: 'vibrate', label: 'Vibration Mode' };
+  }
+  if (/\b(silent\s*mode|silent|do\s*not\s*disturb|dnd)\b/.test(lower) && !/\bopen\s+settings\b/.test(lower)) {
+    return { settingType: 'ringer', settingAction: 'silent', ringerMode: 'silent', label: 'Silent Mode' };
+  }
+  if (/\b(normal\s*mode|ring\s*mode|ringer\s*mode|sound\s*mode|general\s*mode|unmute\s*phone)\b/.test(lower)) {
+    return { settingType: 'ringer', settingAction: 'normal', ringerMode: 'normal', label: 'Normal Mode' };
+  }
+  if ((/\b(wi[\s-]?fi|wifi|waifai|vifi|yfi)\b/.test(lower) || /वाई[\s-]?फाई|वाईफाई/.test(lower)) && hasActionVerb) {
+    return { settingType: 'wifi', settingAction: onOff, label: 'Wi-Fi' };
+  }
+  if (/\b(mobile\s*data|cellular\s*data|internet|network|net)\b/.test(lower) && hasActionVerb) {
+    return { settingType: 'network', settingAction: onOff, label: 'Mobile Network' };
+  }
+  if (/\b(bluetooth)\b/.test(lower) && hasActionVerb) {
+    return { settingType: 'bluetooth', settingAction: onOff, label: 'Bluetooth' };
+  }
+  if (/\b(flashlight|torch|flash)\b/.test(lower) && hasActionVerb) {
+    return { settingType: 'flashlight', settingAction: wantsOff ? 'off' : 'on', label: 'Flashlight' };
+  }
+  if (/\b(airplane\s*mode|flight\s*mode)\b/.test(lower)) {
+    return { settingType: 'airplane', settingAction: onOff, label: 'Airplane Mode' };
+  }
+  if (/\b(hotspot)\b/.test(lower) && hasActionVerb) {
+    return { settingType: 'hotspot', settingAction: onOff, label: 'Hotspot' };
+  }
+  if (/\b(location|gps)\b/.test(lower) && hasActionVerb) {
+    return { settingType: 'location', settingAction: onOff, label: 'Location' };
+  }
+  if (/\b(battery\s*saver|power\s*sav(?:ing|er))\b/.test(lower)) {
+    return { settingType: 'battery_saver', settingAction: onOff, label: 'Battery Saver' };
+  }
+  return null;
+}
+
+const MOTHER_ALIAS_RE =
+  /\b(mom|mommy|mama|mummy|mata|mataji|mother|maa|amma|ammi)\b|मॉम|मॉम्मी|मम्मी|माँ|मां|माता|अम्मा|अम्मी/;
+const FATHER_ALIAS_RE =
+  /\b(dad|daddy|papa|pita|pitaji|father|pa|abba)\b|पापा|डैड|डैडी|पिता|अब्बा/;
+
+function matchContactClient(lower: string, contacts: Contact[] = [], rawCommand: string = '') {
+  const probe = `${lower} ${rawCommand}`.trim();
+  const isMotherAlias = MOTHER_ALIAS_RE.test(probe);
+  const isFatherAlias = FATHER_ALIAS_RE.test(probe);
+
+  // 1. Prefer real synced phonebook contacts (non-placeholder) matching exact name, relation, or family alias
+  const orderedContacts = [
+    ...contacts.filter((c) => !String(c.id || '').startsWith('c-')),
+    ...contacts.filter((c) => String(c.id || '').startsWith('c-')),
+  ];
+
+  for (const c of orderedContacts) {
+    const rel = String(c.relation || '').toLowerCase().trim();
+    const name = String(c.name || '').toLowerCase().trim();
+    const entryIsMom =
+      rel === 'mother' ||
+      MOTHER_ALIAS_RE.test(rel) ||
+      MOTHER_ALIAS_RE.test(name);
+    const entryIsDad =
+      rel === 'father' ||
+      FATHER_ALIAS_RE.test(rel) ||
+      FATHER_ALIAS_RE.test(name);
+
     if (
-      (rel && lower.includes(rel)) ||
-      (name && lower.includes(name)) ||
-      (isMotherAlias && rel === 'mother') ||
-      (isFatherAlias && rel === 'father')
+      (rel && rel.length >= 2 && lower.includes(rel)) ||
+      (name && name.length >= 2 && lower.includes(name)) ||
+      (isMotherAlias && entryIsMom) ||
+      (isFatherAlias && entryIsDad)
     ) {
+      const hasDistinctRel = c.relation && c.relation.toLowerCase() !== c.name.toLowerCase();
       return {
-        targetContact: c.relation && c.relation !== c.name ? `${c.relation} (${c.name})` : c.name || c.relation,
-        shortName: c.relation || c.name,
-        phone: String(c.phone || '+919876543210'),
+        targetContact: hasDistinctRel ? `${c.relation} (${c.name})` : c.name || c.relation,
+        shortName: isMotherAlias ? 'Mom' : isFatherAlias ? 'Dad' : c.relation || c.name,
+        phone: String(c.phone || ''),
       };
     }
   }
 
-  for (const c of contacts) {
+  for (const c of orderedContacts) {
     const firstName = String(c.name || '').toLowerCase().split(/\s+/)[0];
     if (firstName && firstName.length >= 3 && lower.includes(firstName)) {
       return {
         targetContact: c.name,
         shortName: c.name,
-        phone: String(c.phone || '+919876543210'),
+        phone: String(c.phone || ''),
       };
     }
   }
 
-  if (isMotherAlias) return { targetContact: 'Mother', shortName: 'Mother', phone: '+919876543210' };
-  if (isFatherAlias) return { targetContact: 'Father', shortName: 'Father', phone: '+919811122233' };
-  if (lower.includes('boss')) return { targetContact: 'Boss', shortName: 'Boss', phone: '+14155550199' };
-  if (lower.includes('priya')) return { targetContact: 'Priya Sharma', shortName: 'Priya', phone: '+919822233445' };
+  if (isMotherAlias) return { targetContact: 'Mom', shortName: 'Mom', phone: '' };
+  if (isFatherAlias) return { targetContact: 'Dad', shortName: 'Dad', phone: '' };
+  if (lower.includes('boss') || probe.includes('बॉस')) return { targetContact: 'Boss', shortName: 'Boss', phone: '+14155550199' };
+  if (lower.includes('priya') || probe.includes('प्रिया')) return { targetContact: 'Priya Sharma', shortName: 'Priya', phone: '+919822233445' };
 
   return null;
+}
+
+function extractSpokenPersonNameClient(command: string): string {
+  const cleaned = command
+    .replace(/^(?:hey|hay|he|ok|hi|hello|हे)[,\s]+(?:jarvis|जार्विस|जर्विस)[,\s:-]*/i, '')
+    .replace(
+      /\b(?:please|kindly|direct|directly|abhi|turant|jaldi|karo|kar\s*do|lagao|laga\s*do|call|dial|ring|phone|whatsapp|whatsap|send|message|text|bhejo|bhej\s*do|to|my|ko|pe|par)\b/gi,
+      ' '
+    )
+    .replace(/कॉल|डायल|फोन|व्हाट्सएप|वॉट्सएप|मैसेज|संदेश|भेजो|भेज\s*दो|करो|कर\s*दो|लगाओ|लगा\s*दो|को|मेरे|मेरी|डायरेक्ट|अभी|कि|:|,/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = cleaned.split(' ').filter((w) => w.length >= 2);
+  if (words.length >= 1 && words.length <= 3) {
+    return words.join(' ');
+  }
+  return '';
+}
+
+function extractAppSearchClient(command: string): { appId: string; appLabel: string; searchQuery: string } | null {
+  const trimmed = command.trim();
+  const lower = trimmed.toLowerCase();
+
+  const hasYouTube = /\b(youtube|yt)\b/i.test(lower) || /यूट्यूब/.test(trimmed);
+  const hasSpotify = /\b(spotify)\b/i.test(lower) || /स्पॉटिफाई/.test(trimmed);
+  const hasGoogle = /\b(google)\b/i.test(lower) || /गूगल/.test(trimmed);
+  const hasMaps = /\b(google\s*maps?|maps?)\b/i.test(lower) || /मैप्स/.test(trimmed);
+  const hasPlayStore = /\b(play\s*store)\b/i.test(lower) || /प्ले\s*स्टोर/.test(trimmed);
+
+  const hasSearchOrPlayCue =
+    /\b(search|find|look\s*up|watch|play|sarch)\b/i.test(lower) ||
+    /सर्च|खोजो|ढूंढो|चलाओ|दिखाओ|बजाओ/.test(trimmed);
+
+  if (!hasSearchOrPlayCue && !(hasYouTube && /\b(video|song|channel|shorts|vlog)\b/i.test(lower))) {
+    return null;
+  }
+
+  let appId = 'google';
+  let appLabel = 'Google';
+  if (hasYouTube) {
+    appId = 'youtube';
+    appLabel = 'YouTube';
+  } else if (hasSpotify) {
+    appId = 'spotify';
+    appLabel = 'Spotify';
+  } else if (hasMaps) {
+    appId = 'maps';
+    appLabel = 'Google Maps';
+  } else if (hasPlayStore) {
+    appId = 'playstore';
+    appLabel = 'Play Store';
+  } else if (hasGoogle) {
+    appId = 'google';
+    appLabel = 'Google';
+  } else {
+    return null;
+  }
+
+  let query = trimmed
+    .replace(/^(?:hey|hay|he|ok|hi|hello|हे)[,\s]+(?:jarvis|जार्विस|जर्विस|youtube|yt|यूट्यूब|google|गूगल|spotify|स्पॉटिफाई)[,\s:-]*/i, '')
+    .replace(/^(?:on|in|pe|par|mein|me|पर|में|पे|ऑन)?\s*(?:youtube|yt|यूट्यूब|google|गूगल|spotify|स्पॉटिफाई|google\s*maps?|maps?|play\s*store)[,\s:-]*/i, '')
+    .replace(/\s+(?:on|in|pe|par|mein|me|पर|में|पे|ऑन)\s*(?:youtube|yt|यूट्यूब|google|गूगल|spotify|स्पॉटिफाई|google\s*maps?|maps?|play\s*store)\b.*$/i, '')
+    .replace(/\b(?:youtube|yt|google|spotify|google\s*maps?|play\s*store)\b/gi, ' ')
+    .replace(/यूट्यूब|गूगल|स्पॉटिफाई|मैप्स|प्ले\s*स्टोर/g, ' ')
+    .replace(/^(?:please|kindly|search|find|watch|play|open|show|karo|sarch)\b[\s,:-]*/i, '')
+    .replace(/^(?:सर्च\s*करो|सर्च\s*कर\s*दो|सर्च|खोजो|ढूंढो|चलाओ|दिखाओ|खोलो|करो)(?=\s|$|[,.:-])[\s,:-]*/g, '')
+    .replace(/\b(?:search|karo|kar\s*do|chalao|dikhao|please|for\s+me)\b[\s.!?,]*$/i, '')
+    .replace(/(?:सर्च\s*करो|सर्च\s*कर\s*दो|सर्च|खोजो|ढूंढो|चलाओ|दिखाओ|करो|कर\s*दो)[\s।.!?,]*$/g, '')
+    .replace(/^(?:for|about|video|song|on|in)\s+/i, '')
+    .replace(/^(?:ऑन|पर|में|पे)\s+/g, '')
+    .replace(/^[,.\s:-]+|[,.\s:-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!query || query.length < 2) return null;
+  return { appId, appLabel, searchQuery: query };
+}
+
+function extractWhatsAppMessageClient(command: string, contactNameHint: string): string {
+  let msg = command.trim();
+  const colonIdx = msg.indexOf(':');
+  if (colonIdx > 0 && colonIdx < msg.length - 1) {
+    const afterColon = msg.slice(colonIdx + 1).trim();
+    if (afterColon.length >= 1) return afterColon;
+  }
+
+  // Hindi/Hinglish pattern: "... ki <message>" or "... कि <message>"
+  const kiMatch = msg.match(/(?:\bki\b|कि)\s+(.+)$/i);
+  if (kiMatch && kiMatch[1] && kiMatch[1].trim().length >= 2) {
+    return kiMatch[1].trim();
+  }
+
+  const sayingMatch = msg.match(/\b(?:saying|that)\s+(.+)$/i);
+  if (sayingMatch && sayingMatch[1] && sayingMatch[1].trim().length >= 2) {
+    return sayingMatch[1].trim();
+  }
+
+  msg = msg
+    .replace(/^(?:hey|hay|he|ok|hi|hello|हे)[,\s]+(?:jarvis|जार्विस|जर्विस)[,\s:-]*/i, '')
+    .replace(
+      /\b(?:please|direct|directly|whatsapp|whatsap|whats\s*app|send|message|msg|text|bhejo|bhej\s*do|bhej|sandesh|karo|kar\s*do|to|my|ko|pe|par|on)\b/gi,
+      ' '
+    )
+    .replace(/व्हाट्सएप|वॉट्सएप|वाट्सएप|मैसेज|संदेश|भेजो|भेज\s*दो|भेज|करो|कर\s*दो|को|पे|पर|डायरेक्ट|कि/g, ' ')
+    .replace(MOTHER_ALIAS_RE, ' ')
+    .replace(FATHER_ALIAS_RE, ' ');
+
+  if (contactNameHint) {
+    for (const part of contactNameHint.split(/[\s()]+/)) {
+      if (part.length >= 2) {
+        const esc = part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        msg = msg.replace(new RegExp(`\\b${esc}\\b`, 'gi'), ' ');
+      }
+    }
+  }
+
+  msg = msg.replace(/^[,.\s:-]+|[,.\s:-]+$/g, '').replace(/\s+/g, ' ').trim();
+  return msg;
 }
 
 const LANGUAGE_MAP: Array<{ names: string[]; label: string; code: string }> = [
@@ -97,13 +340,86 @@ function detectLanguageSwitchClient(command: string): { label: string; code: str
   return null;
 }
 
+const APP_ALIAS_RULES: Array<{ patterns: RegExp[]; appId: string; appLabel: string }> = [
+  { patterns: [/\b(instagram|insta|ig)\b/i], appId: 'instagram', appLabel: 'Instagram' },
+  { patterns: [/\b(calendar|calender)\b/i], appId: 'calendar', appLabel: 'Calendar' },
+  { patterns: [/\btrue\s*caller\b/i], appId: 'truecaller', appLabel: 'Truecaller' },
+  { patterns: [/\bfree\s*f\s*ire(?:\s*max)?\b/i, /\bfreefire(?:\s*max)?\b/i], appId: 'freefire', appLabel: 'Free Fire' },
+  { patterns: [/\b(whatsapp|whatsap|whats\s*app)\b/i], appId: 'whatsapp', appLabel: 'WhatsApp' },
+  { patterns: [/\b(youtube|yt)\b/i], appId: 'youtube', appLabel: 'YouTube' },
+  { patterns: [/\b(spotify|music|gana)\b/i], appId: 'spotify', appLabel: 'Spotify' },
+  { patterns: [/\b(telegram)\b/i], appId: 'telegram', appLabel: 'Telegram' },
+  { patterns: [/\b(google\s*maps?|maps?)\b/i], appId: 'maps', appLabel: 'Google Maps' },
+  { patterns: [/\b(chrome|browser)\b/i], appId: 'browser', appLabel: 'Chrome' },
+  { patterns: [/\b(google\s*pay|gpay|g\s*pay)\b/i], appId: 'gpay', appLabel: 'Google Pay' },
+  { patterns: [/\b(google)\b/i], appId: 'google', appLabel: 'Google' },
+  { patterns: [/\b(dialer|phone\s*app|call\s*app|phone|call)\b/i], appId: 'dialer', appLabel: 'Phone Dialer' },
+  { patterns: [/\b(gmail|mail|email)\b/i], appId: 'gmail', appLabel: 'Gmail' },
+  { patterns: [/\b(snapchat|snap)\b/i], appId: 'snapchat', appLabel: 'Snapchat' },
+  { patterns: [/\b(facebook|fb)\b/i], appId: 'facebook', appLabel: 'Facebook' },
+  { patterns: [/\b(phone\s*pe)\b/i], appId: 'phonepe', appLabel: 'PhonePe' },
+  { patterns: [/\b(paytm)\b/i], appId: 'paytm', appLabel: 'Paytm' },
+  { patterns: [/\b(play\s*store)\b/i], appId: 'playstore', appLabel: 'Play Store' },
+  { patterns: [/\b(photos?|gallery)\b/i], appId: 'photos', appLabel: 'Photos' },
+  { patterns: [/\b(bgmi|pubg)\b/i], appId: 'bgmi', appLabel: 'BGMI' },
+  { patterns: [/\b(netflix)\b/i], appId: 'netflix', appLabel: 'Netflix' },
+  { patterns: [/\b(amazon)\b/i], appId: 'amazon', appLabel: 'Amazon' },
+  { patterns: [/\b(flipkart)\b/i], appId: 'flipkart', appLabel: 'Flipkart' },
+  { patterns: [/\b(terminal)\b/i], appId: 'terminal', appLabel: 'Terminal' },
+  { patterns: [/\b(camera)\b/i], appId: 'camera', appLabel: 'Camera' },
+  { patterns: [/\b(calc|calculator)\b/i], appId: 'calculator', appLabel: 'Calculator' },
+  { patterns: [/\b(vs\s*code|vscode)\b/i], appId: 'vscode', appLabel: 'VS Code' },
+  { patterns: [/\b(settings?)\b/i], appId: 'settings', appLabel: 'Settings' },
+];
+
+function resolveRequestedAppClient(command: string): { appId: string; appLabel: string } {
+  const lower = command.toLowerCase();
+  for (const rule of APP_ALIAS_RULES) {
+    if (rule.patterns.some((re) => re.test(lower))) {
+      return { appId: rule.appId, appLabel: rule.appLabel };
+    }
+  }
+
+  let extracted = command
+    .replace(/^(?:hey|hi|ok|please|kindly|jarvis)[,\s]+/gi, '')
+    .replace(/^.*?\b(?:open|launch|start|run|play|kholo|chalu\s*karo|chalu)\b\s*/i, '')
+    .replace(/\b(?:on\s+my\s+phone|in\s+my\s+phone|on\s+phone|my\s+phone|the\s+app|application|app|please|jarvis|kholo|karo|kar\s*do)\b/gi, '')
+    .replace(/[^\w\s.-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (extracted && extracted.length >= 2) {
+    const label = extracted
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+    return {
+      appId: extracted.toLowerCase(),
+      appLabel: label,
+    };
+  }
+
+  return { appId: 'google', appLabel: 'Google' };
+}
+
 export function parseCommandLocallyClient(
   command: string,
   customWakeWord: string = 'Jarvis',
   contacts: Contact[] = [],
   personalityMode: PersonalityMode = 'balanced',
   activeLanguage: string = 'English',
-  activeLanguageCode: string = 'en-US'
+  activeLanguageCode: string = 'en-US',
+  deviceContext?: {
+    localDate?: string;
+    localTime?: string;
+    batteryLevel?: number;
+    isCharging?: boolean;
+    ringerMode?: 'normal' | 'vibrate' | 'silent';
+    wifiEnabled?: boolean;
+    networkConnected?: boolean;
+    networkType?: string;
+  }
 ) {
   const lower = command.toLowerCase().trim();
   const isFriendTone = personalityMode === 'friend';
@@ -138,21 +454,12 @@ export function parseCommandLocallyClient(
   }
 
   let intent = 'GENERAL_CONVERSATION';
-  let targetContact = 'Mother';
-  let shortContact = 'Mother';
-  let phone = '+919876543210';
-  let msg = command
-    .replace(/^.*?(send message to|message to|text to|whatsapp to|whatsapp|message|text)\s+(my\s+)?([a-zA-Z]+)?\s*[:,-]?\s*(that|saying|ki)?\s*/i, '')
-    .trim();
+  let targetContact = 'Mom';
+  let shortContact = 'Mom';
+  let phone = '';
+  let searchQuery = '';
 
-  if (msg.includes(':')) {
-    const afterColon = msg.split(/:\s*/).slice(1).join(': ').trim();
-    if (afterColon) msg = afterColon;
-  } else if (msg.toLowerCase().startsWith('to ')) {
-    msg = msg.replace(/^to\s+(my\s+)?[a-zA-Z\s]+[:,-]?\s*/i, '').trim();
-  }
-
-  const matched = matchContactClient(lower, contacts);
+  const matched = matchContactClient(lower, contacts, command);
   if (matched) {
     targetContact = matched.targetContact;
     shortContact = matched.shortName;
@@ -163,30 +470,79 @@ export function parseCommandLocallyClient(
       phone = digitsMatch[1].replace(/[^\d+]/g, '');
       targetContact = phone;
       shortContact = phone;
+    } else {
+      const spokenName = extractSpokenPersonNameClient(command);
+      if (spokenName) {
+        targetContact = spokenName;
+        shortContact = spokenName;
+      }
     }
   }
+
+  let msg = extractWhatsAppMessageClient(command, targetContact);
 
   let vol = 75;
   let br = 80;
   let appId = 'whatsapp';
   let appLabel = 'WhatsApp';
+  let settingType = '';
+  let settingAction = '';
+  let settingLabel = '';
+  let ringerMode: 'normal' | 'vibrate' | 'silent' | undefined;
 
-  if (
-    (/\b(call|dial|ring|phone)\b/.test(lower) || lower.includes('call lagao') || lower.includes('phone karo')) &&
-    !lower.includes('whatsapp') &&
-    !lower.includes('message')
-  ) {
-    intent = 'CALL_CONTACT';
-  } else if (
-    (lower.includes('whatsapp') && (lower.includes('message') || lower.includes('send') || lower.includes('text') || lower.includes('bhej') || matched)) ||
+  const isAppLaunchCommand =
+    /\b(open|launch|kholo|start|chalu)\b|खोलो|चलाओ|चालू/i.test(lower) ||
+    /\bplay\s+(free\s*f\s*ire|freefire|bgmi|pubg)\b/i.test(lower);
+  const hasPhoneNumber = /\d{4,}/.test(lower);
+  const matchedSetting = resolveDeviceSettingClient(lower);
+  const appSearch = extractAppSearchClient(command);
+  const isBatteryOrDiagnostic =
+    /\b(battery|charging|diagnostic|diagnostics)\b/.test(lower) ||
+    (/\bstatus\b/.test(lower) && !lower.includes('whatsapp'));
+
+  const isCallCue =
+    /\b(call|dial|ring)\b/.test(lower) ||
+    /(call\s*karo|call\s*lagao|phone\s*karo|phone\s*lagao)/.test(lower) ||
+    /(कॉल\s*करो|कॉल\s*लगाओ|फोन\s*करो|फोन\s*लगाओ|डायल\s*करो|रिंग\s*करो|कॉल|फोन\s*लगा)/.test(command) ||
+    (/\bphone\b/.test(lower) && Boolean(matched));
+
+  const isWhatsAppCue =
+    lower.includes('whatsapp') ||
+    lower.includes('whatsap') ||
+    /व्हाट्सएप|वॉट्सएप|वाट्सएप/.test(command) ||
     lower.includes('message') ||
     lower.includes('text') ||
     lower.includes('bhej') ||
-    lower.includes('sandesh')
+    lower.includes('sandesh') ||
+    /मैसेज|संदेश|भेजो|भेज\s*दो/.test(command);
+
+  if (matchedSetting) {
+    intent = 'DEVICE_SETTING';
+    settingType = matchedSetting.settingType;
+    settingAction = matchedSetting.settingAction;
+    settingLabel = matchedSetting.label;
+    ringerMode = matchedSetting.ringerMode;
+  } else if (isBatteryOrDiagnostic) {
+    intent = 'SYSTEM_DIAGNOSTIC';
+  } else if (appSearch) {
+    intent = 'SEARCH_WEB';
+    appId = appSearch.appId;
+    appLabel = appSearch.appLabel;
+    searchQuery = appSearch.searchQuery;
+  } else if (
+    isCallCue &&
+    (!isAppLaunchCommand || Boolean(matched) || hasPhoneNumber) &&
+    !lower.includes('app') &&
+    !lower.includes('whatsapp') &&
+    !/व्हाट्सएप|वॉट्सएप/.test(command) &&
+    !lower.includes('message') &&
+    !/मैसेज|संदेश/.test(command)
   ) {
+    intent = 'CALL_CONTACT';
+  } else if (isWhatsAppCue) {
     intent = 'WHATSAPP_SEND';
-    if (!msg || msg === command || msg.length < 2) {
-      msg = 'Hello, this is a message sent via Jarvis.';
+    if (!msg || msg.length < 2) {
+      msg = 'Hello!';
     }
   } else if (
     lower.includes('volume') ||
@@ -226,84 +582,44 @@ export function parseCommandLocallyClient(
     intent = 'SYSTEM_TERMINAL';
     appId = 'terminal';
     appLabel = 'Terminal';
-  } else if (
-    lower.includes('open') ||
-    lower.includes('launch') ||
-    lower.includes('kholo') ||
-    lower.includes('start') ||
-    lower.includes('chalu')
-  ) {
+  } else if (isAppLaunchCommand) {
     intent = 'LAUNCH_APP';
-    if (lower.includes('youtube') || lower.includes('yt')) {
-      appId = 'youtube';
-      appLabel = 'YouTube';
-    } else if (lower.includes('spotify') || lower.includes('music') || lower.includes('gana')) {
-      appId = 'spotify';
-      appLabel = 'Spotify';
-    } else if (lower.includes('whatsapp')) {
-      appId = 'whatsapp';
-      appLabel = 'WhatsApp';
-    } else if (lower.includes('instagram') || lower.includes('insta')) {
-      appId = 'instagram';
-      appLabel = 'Instagram';
-    } else if (lower.includes('telegram')) {
-      appId = 'telegram';
-      appLabel = 'Telegram';
-    } else if (lower.includes('map')) {
-      appId = 'maps';
-      appLabel = 'Google Maps';
-    } else if (lower.includes('terminal')) {
-      appId = 'terminal';
-      appLabel = 'Terminal';
-    } else if (lower.includes('camera')) {
-      appId = 'camera';
-      appLabel = 'Camera';
-    } else if (lower.includes('calc')) {
-      appId = 'calculator';
-      appLabel = 'Calculator';
-    } else if (lower.includes('code') || lower.includes('vs')) {
-      appId = 'vscode';
-      appLabel = 'VS Code';
-    } else if (lower.includes('setting')) {
-      appId = 'settings';
-      appLabel = 'Settings';
-    } else if (lower.includes('browser') || lower.includes('chrome') || lower.includes('google')) {
-      appId = 'browser';
-      appLabel = 'Chrome';
-    } else {
-      appId = 'whatsapp';
-      appLabel = 'WhatsApp';
-    }
-  } else if (
-    lower.includes('status') ||
-    lower.includes('diagnostic') ||
-    lower.includes('battery')
-  ) {
-    intent = 'SYSTEM_DIAGNOSTIC';
+    const resolvedApp = resolveRequestedAppClient(command);
+    appId = resolvedApp.appId;
+    appLabel = resolvedApp.appLabel;
   }
 
   let hindiVoiceReply = '';
   let englishActionSummary = '';
 
   if (intent === 'CALL_CONTACT') {
-    const hindiHonorific = shortContact === 'Mother' ? 'माताजी' : shortContact === 'Father' ? 'पिताजी' : targetContact;
+    const hindiHonorific = shortContact === 'Mother' || shortContact === 'Mom' ? 'मॉम' : shortContact === 'Father' || shortContact === 'Dad' ? 'पापा' : targetContact;
     englishActionSummary = isFriendTone
-      ? `Sure buddy, calling ${targetContact} right now!`
-      : `Yes sir, placing a call to ${targetContact}.`;
+      ? `Calling ${targetContact} directly right now!`
+      : `Yes sir, placing a direct call to ${targetContact}.`;
     hindiVoiceReply = isHindiMode
       ? isFriendTone
-        ? `अरे बिल्कुल भाई, ${hindiHonorific} को अभी कॉल लगा रहा हूँ।`
-        : `जी सर, ${hindiHonorific} को कॉल लगा रहा हूँ।`
+        ? `अरे बिल्कुल भाई, ${hindiHonorific} को अभी डायरेक्ट कॉल लगा रहा हूँ।`
+        : `जी सर, ${hindiHonorific} को डायरेक्ट कॉल लगा रहा हूँ।`
       : englishActionSummary;
   } else if (intent === 'WHATSAPP_SEND') {
-    const hindiHonorific = shortContact === 'Mother' ? 'माताजी' : shortContact === 'Father' ? 'पिताजी' : targetContact;
+    const hindiHonorific = shortContact === 'Mother' || shortContact === 'Mom' ? 'मॉम' : shortContact === 'Father' || shortContact === 'Dad' ? 'पापा' : targetContact;
     englishActionSummary = isFriendTone
-      ? `Done! Opening WhatsApp message for ${targetContact}: "${msg}".`
-      : `Yes sir, opening WhatsApp to send your message to ${targetContact}: "${msg}".`;
+      ? `Sending WhatsApp message directly to ${targetContact}: "${msg}".`
+      : `Yes sir, sending WhatsApp message directly to ${targetContact}: "${msg}".`;
     hindiVoiceReply = isHindiMode
       ? isFriendTone
-        ? `हो गया दोस्त! ${hindiHonorific} के लिए व्हाट्सएप मैसेज खोल दिया है: "${msg}"।`
-        : `जी सर, ${hindiHonorific} को व्हाट्सएप संदेश भेजने के लिए खोल दिया गया है: "${msg}"।`
+        ? `हो गया दोस्त! ${hindiHonorific} को व्हाट्सएप मैसेज डायरेक्ट भेज रहा हूँ: "${msg}"।`
+        : `जी सर, ${hindiHonorific} को व्हाट्सएप मैसेज डायरेक्ट भेज रहा हूँ: "${msg}"।`
+      : englishActionSummary;
+  } else if (intent === 'SEARCH_WEB') {
+    englishActionSummary = isFriendTone
+      ? `Searching "${searchQuery}" on ${appLabel} right now!`
+      : `Yes sir, searching "${searchQuery}" inside ${appLabel}.`;
+    hindiVoiceReply = isHindiMode
+      ? isFriendTone
+        ? `अभी लो भाई, ${appLabel} पर "${searchQuery}" सर्च कर रहा हूँ!`
+        : `जी सर, ${appLabel} में "${searchQuery}" सर्च कर रहा हूँ।`
       : englishActionSummary;
   } else if (intent === 'SYSTEM_VOLUME') {
     englishActionSummary = vol === 0 ? 'Yes sir, master audio muted.' : `Yes sir, master audio volume set to ${vol}%.`;
@@ -324,9 +640,59 @@ export function parseCommandLocallyClient(
         ? `हां दोस्त, ${appLabel} ऐप अभी खोल रहा हूँ!`
         : `जी सर, ${appLabel} ऐप खुल रहा है।`
       : englishActionSummary;
+  } else if (intent === 'DEVICE_SETTING') {
+    if (settingType === 'ringer') {
+      englishActionSummary = isFriendTone
+        ? `Done buddy! Switched phone to ${settingLabel}.`
+        : `Yes sir, switching phone to ${settingLabel}.`;
+      hindiVoiceReply = isHindiMode
+        ? `जी सर, फोन को ${settingLabel} में बदल दिया गया है।`
+        : englishActionSummary;
+    } else if (settingType === 'flashlight') {
+      englishActionSummary = `Yes sir, flashlight turned ${settingAction}.`;
+      hindiVoiceReply = isHindiMode
+        ? `जी सर, टॉर्च ${settingAction === 'on' ? 'चालू' : 'बंद'} कर दी गई है।`
+        : englishActionSummary;
+    } else {
+      const actionVerb = settingAction === 'on' ? 'to turn on' : settingAction === 'off' ? 'to turn off' : '';
+      englishActionSummary = actionVerb
+        ? `Yes sir, opening ${settingLabel} control ${actionVerb} ${settingLabel}.`
+        : `Yes sir, opening ${settingLabel} settings.`;
+      hindiVoiceReply = isHindiMode
+        ? `जी सर, ${settingLabel} सेटिंग पैनल खोल रहा हूँ।`
+        : englishActionSummary;
+    }
   } else if (intent === 'SYSTEM_DIAGNOSTIC') {
-    englishActionSummary = 'All systems are online and nominal, sir.';
-    hindiVoiceReply = isHindiMode ? 'सिस्टम के सभी सब-सिस्टम सामान्य रूप से कार्य कर रहे हैं सर।' : englishActionSummary;
+    const bat = deviceContext?.batteryLevel;
+    const chg = deviceContext?.isCharging;
+    const batStr =
+      typeof bat === 'number'
+        ? `${bat}%${chg ? ' and charging' : ''}`
+        : 'currently unavailable in browser telemetry';
+    const netStr =
+      deviceContext?.networkConnected === false
+        ? 'Offline'
+        : deviceContext?.networkType
+        ? deviceContext.networkType.toUpperCase()
+        : 'Online';
+    const ringerStr = deviceContext?.ringerMode ? `, Sound: ${deviceContext.ringerMode}` : '';
+
+    if (lower.includes('battery') || lower.includes('charging')) {
+      englishActionSummary =
+        typeof bat === 'number'
+          ? `Yes sir, your phone battery is at ${batStr}.`
+          : 'Your browser does not expose battery telemetry here, sir—on the Android APK I can read your exact phone battery percentage.';
+      hindiVoiceReply = isHindiMode
+        ? typeof bat === 'number'
+          ? `जी सर, आपके फोन की बैटरी अभी ${bat}% है${chg ? ' और चार्ज हो रही है' : ''}।`
+          : 'सर, ब्राउज़र बैटरी जानकारी नहीं दे रहा है—एंड्रॉयड ऐप में मैं आपकी सही बैटरी प्रतिशत बता सकता हूँ।'
+        : englishActionSummary;
+    } else {
+      englishActionSummary = `All systems nominal, sir. Battery: ${batStr}, Network: ${netStr}${ringerStr}.`;
+      hindiVoiceReply = isHindiMode
+        ? `सिस्टम सामान्य है सर। बैटरी ${typeof bat === 'number' ? `${bat}%` : 'ऑनलाइन'}, नेटवर्क ${netStr}।`
+        : englishActionSummary;
+    }
   } else {
     const mathMatch = lower.match(/(\d+(?:\.\d+)?)\s*([+\-*/x×÷])\s*(\d+(?:\.\d+)?)/);
     if (mathMatch) {
@@ -340,6 +706,47 @@ export function parseCommandLocallyClient(
       else if ((op === '/' || op === '÷') && b !== 0) res = Number((a / b).toFixed(4));
       englishActionSummary = `Yes sir, ${a} ${op} ${b} equals ${res}.`;
       hindiVoiceReply = isHindiMode ? `जी सर, ${a} और ${b} का उत्तर ${res} है।` : englishActionSummary;
+    } else if (isDirectClockQuery(command)) {
+      const now = new Date();
+      const dateStrEn =
+        deviceContext?.localDate ||
+        now.toLocaleDateString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        });
+      const dateStrHi = now.toLocaleDateString('hi-IN', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      const timeStr =
+        deviceContext?.localTime ||
+        now.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        });
+      const asksTime = /\b(time|clock)\b/.test(lower) || lower.includes('samay') || lower.includes('baje');
+      const asksDateOrDay =
+        /\b(date|day|today)\b/.test(lower) ||
+        lower.includes('tarikh') ||
+        lower.includes('taarikh') ||
+        lower.includes('din') ||
+        lower.includes('aaj');
+
+      if (asksTime && asksDateOrDay) {
+        englishActionSummary = `Yes sir, today is ${dateStrEn}, and the current time is ${timeStr}.`;
+        hindiVoiceReply = isHindiMode ? `जी सर, आज ${dateStrHi} है और अभी समय ${timeStr} हुआ है।` : englishActionSummary;
+      } else if (asksTime) {
+        englishActionSummary = `Yes sir, the current time is ${timeStr}.`;
+        hindiVoiceReply = isHindiMode ? `जी सर, अभी समय ${timeStr} हुआ है।` : englishActionSummary;
+      } else {
+        englishActionSummary = `Yes sir, today is ${dateStrEn}.`;
+        hindiVoiceReply = isHindiMode ? `जी सर, आज ${dateStrHi} है।` : englishActionSummary;
+      }
     } else if (lower.includes('joke') || lower.includes('funny')) {
       englishActionSummary =
         'Alright buddy, here is one: Why did the computer go to the doctor? Because it caught a byte and needed its cache cleared!';
@@ -355,6 +762,16 @@ export function parseCommandLocallyClient(
       englishActionSummary = "Doing great, friend! Systems charged and ready. What's the plan today?";
       hindiVoiceReply = isHindiMode
         ? 'एकदम बढ़िया दोस्त! आपकी सेवा के लिए तैयार हूँ। आप बताइए, आज क्या प्लान है?'
+        : englishActionSummary;
+    } else if (lower.includes('anime') || lower.includes('isekai') || lower.includes('ishika')) {
+      englishActionSummary =
+        lower.includes('isekai') || lower.includes('ishika')
+          ? 'Top Isekai Anime recommendations: That Time I Got Reincarnated as a Slime, Mushoku Tensei, Re:Zero, Overlord, Konosuba, No Game No Life, Eminence in Shadow, The Rising of the Shield Hero, Sword Art Online, and Solo Leveling.'
+          : 'Top Anime recommendations: Attack on Titan, Death Note, Fullmetal Alchemist: Brotherhood, Demon Slayer, Jujutsu Kaisen, Solo Leveling, One Piece, Naruto Shippuden, Vinland Saga, and Steins;Gate.';
+      hindiVoiceReply = isHindiMode
+        ? lower.includes('isekai') || lower.includes('ishika')
+          ? 'शीर्ष इसेकाई एनीमे नाम: टेंसूरा (स्लाइम), मुशोकु तेंसेई, री:ज़ीरो, ओवरलॉर्ड, कोनोसुबा, नो गेम नो लाइफ, एमिनेंस इन शैडो, शील्ड हीरो, स्वॉर्ड आर्ट ऑनलाइन और सोलो लेवलिंग।'
+          : 'शीर्ष एनीमे नाम: अटैक ऑन टाइटन, डेथ नोट, फुलमेटल अल्केमिस्ट, डीमन स्लेयर, जुजुत्सु काइसेन, सोलो लेवलिंग, वन पीस, नारुतो शिपूडेन, विनलैंड सागा और स्टाइन्स गेट।'
         : englishActionSummary;
     } else {
       englishActionSummary = isFriendTone
@@ -374,13 +791,22 @@ export function parseCommandLocallyClient(
     hindiVoiceReply,
     wakeWordDetected: lower.includes(customWakeWord.toLowerCase()),
     actionPayload: {
-      target: targetContact,
+      target:
+        intent === 'LAUNCH_APP' || intent === 'SEARCH_WEB'
+          ? appLabel
+          : intent === 'DEVICE_SETTING'
+          ? settingLabel
+          : targetContact,
       recipientPhone: phone,
       message: msg,
+      searchQuery: searchQuery || undefined,
       volumeLevel: vol,
       brightnessLevel: br,
       appId,
+      settingType: settingType || undefined,
+      settingAction: settingAction || undefined,
+      ringerMode,
     },
-    quickFollowUps: ['Open YouTube', 'Open Spotify', 'Turn to Hindi'],
+    quickFollowUps: ['Call Mom', 'Search on YouTube', 'Turn on Wi-Fi'],
   };
 }

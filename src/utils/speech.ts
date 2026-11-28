@@ -20,21 +20,127 @@ export class JarvisSpeechEngine {
   private wakeWord: string = 'jarvis';
   private onWakeWordTriggered?: () => void;
   private onCommandHeard?: (command: string, wakeWordMatched: boolean) => void;
+  private onCommandWindowClosed?: () => void;
   private onListeningStateChanged?: (listening: boolean) => void;
   private onSpeechStart?: () => void;
   private onSpeechEnd?: () => void;
   private autoRestart: boolean = true;
   private isSpeaking: boolean = false;
   private wakeWordActiveUntil: number = 0;
+  private silenceTimer: any = null;
   private lastProcessedTranscript: string = '';
   private lastProcessedTime: number = 0;
   private restartTimer: any = null;
+  private watchdogTimer: any = null;
   private speechFallbackTimer: any = null;
+  private interimCommitTimer: any = null;
+  private wakeAckTimer: any = null;
+  private lastWakeGlowTime: number = 0;
+  private recognitionLang: string = 'en-IN';
   private activeTtsCallbacks: { onEnd?: () => void } = {};
 
   constructor() {
     this.initRecognition();
     this.initNativeAndroidListeners();
+  }
+
+  private scheduleSilenceClose(durationMs: number = 12000) {
+    clearTimeout(this.silenceTimer);
+    this.wakeWordActiveUntil = Date.now() + durationMs;
+    this.silenceTimer = setTimeout(() => {
+      if (this.isSpeaking) {
+        this.scheduleSilenceClose(5000);
+        return;
+      }
+      if (this.wakeWordActiveUntil > 0 && Date.now() >= this.wakeWordActiveUntil) {
+        this.wakeWordActiveUntil = 0;
+        this.lastProcessedTranscript = '';
+        this.onCommandWindowClosed?.();
+      }
+    }, durationMs + 50);
+  }
+
+  public openCommandWindow(durationMs: number = 12000) {
+    this.lastProcessedTranscript = '';
+    this.scheduleSilenceClose(durationMs);
+    this.onWakeWordTriggered?.();
+  }
+
+  public closeCommandWindow() {
+    clearTimeout(this.silenceTimer);
+    clearTimeout(this.interimCommitTimer);
+    clearTimeout(this.wakeAckTimer);
+    this.wakeWordActiveUntil = 0;
+    this.lastProcessedTranscript = '';
+    this.onCommandWindowClosed?.();
+  }
+
+  public isCommandWindowOpen(): boolean {
+    return this.wakeWordActiveUntil > 0 && Date.now() < this.wakeWordActiveUntil;
+  }
+
+  private matchesDirectAppCommandWake(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    const hasAppWake =
+      /\b(?:hey|hay|he|ey|a|ok|hi)[,\s]+(?:youtube|yt|google|spotify)\b/i.test(lower) ||
+      /(?:हे|ऐ|ओ)[,\s]+(?:youtube|यूट्यूब|google|गूगल|spotify|स्पॉटिफाई)/i.test(text);
+    if (!hasAppWake) return false;
+    return /\b(?:search|find|watch|play|open|show|karo|chalao|kholo|dikhao|dhundo|khojo)\b|सर्च|खोजो|ढूंढो|चलाओ|दिखाओ|खोलो|करो/i.test(
+      text
+    );
+  }
+
+  private getNormalizedWakeBase(): string {
+    const rawWake = (this.wakeWord || 'jarvis').trim().toLowerCase();
+    return rawWake.replace(/^(hey|hay|he|ey|ok|okay|hi|hello|yo)[,\s]+/i, '').trim() || 'jarvis';
+  }
+
+  private pickBestTranscriptFromAlternatives(alternatives: string[]): string {
+    const cleaned = alternatives.map((a) => String(a || '').trim()).filter(Boolean);
+    if (cleaned.length === 0) return '';
+    // Prefer any speech recognizer hypothesis that contains the wake word (fixes "service"/"chavis" first-choice errors)
+    for (const alt of cleaned) {
+      if (this.matchesStrictWakePhrase(alt)) {
+        return alt;
+      }
+    }
+    return cleaned[0];
+  }
+
+  private matchesStrictWakePhrase(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    const normalizedWake = this.getNormalizedWakeBase();
+    const escapedWake = normalizedWake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const customPattern = new RegExp(`\\b(?:(?:hey|hay|he|ey|a|ok|okay|hi|hello|yo)[,\\s]+)?${escapedWake}\\b`, 'i');
+    const jarvisAnyPattern =
+      /\b(?:(?:hey|hay|he|ey|a|ok|okay|hi|hello|yo)[,\s]+)?(?:jarvis|jarvish|jarvas|jarvice|jarves|jarviz|jarvis+|javis|jervis|charvis|jarwis|jarvisss|जार्विस|जर्विस|जरविस|जार्विश)\b/i;
+    const hindiWakePattern = /(?:हे|ऐ|अरे|ओ|सुनो)?[\s,]*(?:जार्विस|जर्विस|जरविस|जार्विश|जारविस)/i;
+    return (
+      customPattern.test(lower) ||
+      jarvisAnyPattern.test(lower) ||
+      hindiWakePattern.test(text) ||
+      this.matchesDirectAppCommandWake(text)
+    );
+  }
+
+  private stripWakePrefix(text: string): string {
+    if (this.matchesDirectAppCommandWake(text)) {
+      return text.replace(/^(?:hey|hay|he|ey|a|ok|hi|हे|ऐ|ओ)[,\s]+/i, '').trim();
+    }
+    const normalizedWake = this.getNormalizedWakeBase();
+    const escapedWake = normalizedWake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const singleWakeRe = new RegExp(
+      `^(?:hey|hay|he|ey|a|ok|okay|hi|hello|yo|हे|ऐ|अरे|ओ|सुनो)?[,\\s:-]*(?:${escapedWake}|jarvis|jarvish|jarvas|jarvice|jarves|jarviz|javis|jervis|charvis|jarwis|जार्विस|जर्विस|जरविस|जार्विश)[,\\s:-]*`,
+      'i'
+    );
+    // Strip repeated wake words (e.g. "Jarvis, Jarvis, Jarvis call mom" -> "call mom")
+    let out = text.trim();
+    for (let i = 0; i < 4; i++) {
+      const next = out.replace(singleWakeRe, '').trim();
+      if (next === out) break;
+      out = next;
+    }
+    return out;
   }
 
   private initNativeAndroidListeners() {
@@ -67,13 +173,13 @@ export class JarvisSpeechEngine {
         const now = Date.now();
         this.lastProcessedTranscript = command;
         this.lastProcessedTime = now;
-        this.wakeWordActiveUntil = now + 12000;
+        this.scheduleSilenceClose(10000);
         this.onWakeWordTriggered?.();
         this.onCommandHeard?.(command, true);
       } else {
-        this.wakeWordActiveUntil = Date.now() + 12000;
+        this.scheduleSilenceClose(10000);
         this.onWakeWordTriggered?.();
-        this.onCommandHeard?.(this.wakeWord, true);
+        this.onCommandHeard?.(`hey ${this.wakeWord}`, true);
       }
     });
 
@@ -87,10 +193,15 @@ export class JarvisSpeechEngine {
       } else if (detail.state === 'end') {
         clearTimeout(this.speechFallbackTimer);
         this.isSpeaking = false;
+        this.lastProcessedTranscript = '';
+        this.lastProcessedTime = 0;
         window.JarvisAndroid?.setTtsSpeakingState?.(false);
         this.onSpeechEnd?.();
         this.activeTtsCallbacks.onEnd?.();
         this.activeTtsCallbacks = {};
+        if (this.wakeWordActiveUntil > 0) {
+          this.scheduleSilenceClose(15000);
+        }
         if (this.isListeningDesired && this.useNativeAndroidSpeech && !this.isEngineRunning) {
           window.JarvisAndroid?.startNativeListening?.();
         }
@@ -98,40 +209,139 @@ export class JarvisSpeechEngine {
     });
   }
 
+  private emitCommandDeduped(rawText: string, wakeMatched: boolean) {
+    const text = rawText.trim();
+    if (!text) return;
+    const now = Date.now();
+    const norm = text.toLowerCase().replace(/\s+/g, ' ');
+    const prevNorm = this.lastProcessedTranscript.toLowerCase().replace(/\s+/g, ' ');
+    if (norm === prevNorm && now - this.lastProcessedTime < 1200) {
+      return;
+    }
+    this.lastProcessedTranscript = text;
+    this.lastProcessedTime = now;
+    clearTimeout(this.interimCommitTimer);
+    clearTimeout(this.wakeAckTimer);
+    this.onCommandHeard?.(text, wakeMatched);
+  }
+
   private processRecognizedText(finalTranscript: string, interimTranscript: string) {
     const candidate = (finalTranscript || interimTranscript).trim();
     if (!candidate || candidate.length < 2) return;
 
-    const lowerCandidate = candidate.toLowerCase();
-    const wake = this.wakeWord.toLowerCase();
+    const hasStrictWakeWord = this.matchesStrictWakePhrase(candidate);
 
-    const hasWakeWord =
-      lowerCandidate.includes(wake) ||
-      lowerCandidate.includes('hey jarvis') ||
-      lowerCandidate.includes('jarvis');
-
-    if (hasWakeWord) {
-      this.wakeWordActiveUntil = Date.now() + 12000;
-      this.onWakeWordTriggered?.();
+    if (hasStrictWakeWord) {
+      this.scheduleSilenceClose(15000);
+      const now = Date.now();
+      if (now - this.lastWakeGlowTime > 800) {
+        this.lastWakeGlowTime = now;
+        this.onWakeWordTriggered?.();
+      }
 
       if (finalTranscript) {
-        const now = Date.now();
-        const text = finalTranscript.trim();
-        if (text !== this.lastProcessedTranscript || now - this.lastProcessedTime > 2000) {
-          this.lastProcessedTranscript = text;
-          this.lastProcessedTime = now;
-          this.onCommandHeard?.(text, true);
+        this.emitCommandDeduped(finalTranscript, true);
+        return;
+      }
+
+      // Ultra-fast interim wake reaction: ack "Yes sir!" in 140ms if standalone wake, or 360ms for inline command
+      const stripped = this.stripWakePrefix(interimTranscript);
+      clearTimeout(this.interimCommitTimer);
+      clearTimeout(this.wakeAckTimer);
+      if (!stripped) {
+        this.wakeAckTimer = setTimeout(() => {
+          if (!this.isSpeaking) {
+            this.emitCommandDeduped(interimTranscript, true);
+          }
+        }, 140);
+      } else {
+        this.interimCommitTimer = setTimeout(() => {
+          if (!this.isSpeaking) {
+            this.emitCommandDeduped(interimTranscript, true);
+          }
+        }, 360);
+      }
+    } else if (this.isCommandWindowOpen()) {
+      if (interimTranscript && !finalTranscript) {
+        this.scheduleSilenceClose(15000);
+        clearTimeout(this.interimCommitTimer);
+        if (interimTranscript.trim().length >= 3) {
+          this.interimCommitTimer = setTimeout(() => {
+            if (!this.isSpeaking && this.isCommandWindowOpen()) {
+              this.emitCommandDeduped(interimTranscript, false);
+            }
+          }, 420);
+        }
+        return;
+      }
+
+      if (finalTranscript) {
+        this.scheduleSilenceClose(15000);
+        this.emitCommandDeduped(finalTranscript, false);
+      }
+    }
+  }
+
+  private ensureRecognitionRestart(delayMs: number = 30, attempt: number = 0) {
+    clearTimeout(this.restartTimer);
+    if (!this.isListeningDesired || !this.autoRestart || this.isSpeaking || this.useNativeAndroidSpeech) {
+      return;
+    }
+
+    this.restartTimer = setTimeout(() => {
+      if (!this.isListeningDesired || this.isEngineRunning || this.isSpeaking || this.useNativeAndroidSpeech) {
+        return;
+      }
+
+      if (attempt >= 3 || !this.recognition) {
+        try {
+          this.recognition?.abort?.();
+        } catch {}
+        this.recognition = null;
+        this.initRecognition();
+      }
+
+      if (!this.recognition) return;
+
+      try {
+        this.recognition.lang = this.recognitionLang || 'en-IN';
+        this.recognition.start();
+        this.isEngineRunning = true;
+      } catch {
+        this.isEngineRunning = false;
+        if (attempt < 6) {
+          this.ensureRecognitionRestart(Math.min(800, 120 * (attempt + 1)), attempt + 1);
         }
       }
-    } else if (finalTranscript && Date.now() < this.wakeWordActiveUntil) {
-      const now = Date.now();
-      const text = finalTranscript.trim();
-      if (text !== this.lastProcessedTranscript || now - this.lastProcessedTime > 2000) {
-        this.lastProcessedTranscript = text;
-        this.lastProcessedTime = now;
-        this.wakeWordActiveUntil = 0;
-        this.onCommandHeard?.(text, false);
+    }, delayMs);
+  }
+
+  private startWatchdog() {
+    clearInterval(this.watchdogTimer);
+    this.watchdogTimer = setInterval(() => {
+      if (!this.isListeningDesired || !this.autoRestart || this.isSpeaking) return;
+      if (this.useNativeAndroidSpeech) {
+        if (!this.isEngineRunning) {
+          window.JarvisAndroid?.startNativeListening?.();
+        }
+      } else if (!this.isEngineRunning) {
+        this.ensureRecognitionRestart(25, 0);
       }
+    }, 550);
+  }
+
+  public ensureStandbyActive() {
+    if (!this.isListeningDesired) {
+      this.startListening(true);
+      return;
+    }
+    if (this.isSpeaking) return;
+    if (this.useNativeAndroidSpeech) {
+      if (!this.isEngineRunning) {
+        window.JarvisAndroid?.startNativeListening?.();
+      }
+    } else if (!this.isEngineRunning) {
+      this.ensureRecognitionRestart(25, 0);
     }
   }
 
@@ -156,7 +366,8 @@ export class JarvisSpeechEngine {
       this.recognition = new SpeechRec();
       this.recognition.continuous = true;
       this.recognition.interimResults = true;
-      this.recognition.lang = 'en-IN';
+      this.recognition.maxAlternatives = 5;
+      this.recognition.lang = this.recognitionLang || 'en-IN';
 
       this.recognition.onstart = () => {
         this.isEngineRunning = true;
@@ -167,33 +378,23 @@ export class JarvisSpeechEngine {
         this.isEngineRunning = false;
 
         if (this.isListeningDesired && this.autoRestart && !this.isSpeaking) {
-          clearTimeout(this.restartTimer);
-          this.restartTimer = setTimeout(() => {
-            if (this.isListeningDesired && !this.isEngineRunning && !this.isSpeaking) {
-              try {
-                this.recognition?.start();
-              } catch {
-                // Ignore already started errors
-              }
-            }
-          }, 150);
+          this.ensureRecognitionRestart(25, 0);
         } else if (!this.isListeningDesired) {
           this.onListeningStateChanged?.(false);
         }
       };
 
       this.recognition.onerror = (event: any) => {
-        if (
-          event.error === 'not-allowed' ||
-          event.error === 'service-not-allowed' ||
-          event.error === 'audio-capture'
-        ) {
+        this.isEngineRunning = false;
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
           this.autoRestart = false;
           this.isListeningDesired = false;
-          this.isEngineRunning = false;
           clearTimeout(this.restartTimer);
           this.onListeningStateChanged?.(false);
           return;
+        }
+        if (this.isListeningDesired && this.autoRestart && !this.isSpeaking) {
+          this.ensureRecognitionRestart(60, 0);
         }
         if (event.error !== 'no-speech' && event.error !== 'aborted') {
           console.warn('Speech recognition notice:', event.error);
@@ -208,10 +409,15 @@ export class JarvisSpeechEngine {
 
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           const item = event.results[i];
+          const alts: string[] = [];
+          for (let a = 0; a < item.length; a++) {
+            if (item[a]?.transcript) alts.push(item[a].transcript);
+          }
+          const best = this.pickBestTranscriptFromAlternatives(alts);
           if (item.isFinal) {
-            finalTranscript += item[0].transcript;
+            finalTranscript += best;
           } else {
-            interimTranscript += item[0].transcript;
+            interimTranscript += best;
           }
         }
 
@@ -225,18 +431,21 @@ export class JarvisSpeechEngine {
   public setCallbacks({
     onWakeWordTriggered,
     onCommandHeard,
+    onCommandWindowClosed,
     onListeningStateChanged,
     onSpeechStart,
     onSpeechEnd,
   }: {
     onWakeWordTriggered?: () => void;
     onCommandHeard?: (command: string, wakeWordMatched: boolean) => void;
+    onCommandWindowClosed?: () => void;
     onListeningStateChanged?: (listening: boolean) => void;
     onSpeechStart?: () => void;
     onSpeechEnd?: () => void;
   }) {
     this.onWakeWordTriggered = onWakeWordTriggered;
     this.onCommandHeard = onCommandHeard;
+    this.onCommandWindowClosed = onCommandWindowClosed;
     this.onListeningStateChanged = onListeningStateChanged;
     this.onSpeechStart = onSpeechStart;
     this.onSpeechEnd = onSpeechEnd;
@@ -247,6 +456,9 @@ export class JarvisSpeechEngine {
   }
 
   public setRecognitionLanguage(langCode: string) {
+    if (langCode) {
+      this.recognitionLang = langCode;
+    }
     if (this.recognition && langCode) {
       try {
         this.recognition.lang = langCode;
@@ -257,6 +469,7 @@ export class JarvisSpeechEngine {
   public startListening(continuous: boolean = true) {
     this.autoRestart = continuous;
     this.isListeningDesired = true;
+    this.startWatchdog();
 
     if (typeof window !== 'undefined' && window.JarvisAndroid?.startNativeListening && this.useNativeAndroidSpeech) {
       const started = window.JarvisAndroid.startNativeListening();
@@ -274,12 +487,7 @@ export class JarvisSpeechEngine {
     this.onListeningStateChanged?.(true);
 
     if (!this.isEngineRunning && !this.isSpeaking) {
-      try {
-        this.recognition.start();
-        this.isEngineRunning = true;
-      } catch {
-        // Ignore already started
-      }
+      this.ensureRecognitionRestart(50, 0);
     }
     return true;
   }
@@ -288,6 +496,10 @@ export class JarvisSpeechEngine {
     this.autoRestart = false;
     this.isListeningDesired = false;
     clearTimeout(this.restartTimer);
+    clearInterval(this.watchdogTimer);
+    clearTimeout(this.silenceTimer);
+    this.wakeWordActiveUntil = 0;
+    this.lastProcessedTranscript = '';
 
     if (typeof window !== 'undefined' && window.JarvisAndroid?.stopNativeListening && this.useNativeAndroidSpeech) {
       window.JarvisAndroid.stopNativeListening();
@@ -371,12 +583,17 @@ export class JarvisSpeechEngine {
           this.speechFallbackTimer = setTimeout(() => {
             if (this.isSpeaking) {
               this.isSpeaking = false;
+              this.lastProcessedTranscript = '';
+              this.lastProcessedTime = 0;
               window.JarvisAndroid?.setTtsSpeakingState?.(false);
               this.onSpeechEnd?.();
               this.activeTtsCallbacks.onEnd?.();
               this.activeTtsCallbacks = {};
+              if (this.isListeningDesired && this.useNativeAndroidSpeech && !this.isEngineRunning) {
+                window.JarvisAndroid?.startNativeListening?.();
+              }
             }
-          }, Math.max(5000, text.length * 140));
+          }, Math.max(1200, Math.min(8000, text.length * 105)));
           return;
         }
       } catch {
@@ -394,6 +611,14 @@ export class JarvisSpeechEngine {
     clearTimeout(this.speechFallbackTimer);
 
     this.isSpeaking = true;
+    // Pause browser SpeechRecognition cleanly while TTS speaks so Android/Chrome releases mic focus cleanly
+    if (!this.useNativeAndroidSpeech && this.recognition && this.isEngineRunning) {
+      try {
+        this.recognition.abort();
+      } catch {}
+      this.isEngineRunning = false;
+    }
+
     this.onSpeechStart?.();
     options.onStart?.();
 
@@ -442,18 +667,17 @@ export class JarvisSpeechEngine {
       finished = true;
       clearTimeout(this.speechFallbackTimer);
       this.isSpeaking = false;
+      this.lastProcessedTranscript = '';
+      this.lastProcessedTime = 0;
       this.onSpeechEnd?.();
       options.onEnd?.();
 
-      if (this.isListeningDesired && !this.isEngineRunning && !this.useNativeAndroidSpeech) {
-        setTimeout(() => {
-          if (this.isListeningDesired && !this.isEngineRunning && !this.isSpeaking) {
-            try {
-              this.recognition?.start();
-              this.isEngineRunning = true;
-            } catch {}
-          }
-        }, 300);
+      if (this.wakeWordActiveUntil > 0) {
+        this.scheduleSilenceClose(15000);
+      }
+
+      if (this.isListeningDesired && !this.useNativeAndroidSpeech) {
+        this.ensureRecognitionRestart(25, 0);
       }
     };
 
@@ -463,7 +687,7 @@ export class JarvisSpeechEngine {
       finishSpeaking();
     };
 
-    this.speechFallbackTimer = setTimeout(finishSpeaking, Math.max(5000, text.length * 140));
+    this.speechFallbackTimer = setTimeout(finishSpeaking, Math.max(1100, Math.min(9000, text.length * 95)));
     window.speechSynthesis.speak(utterance);
   }
 

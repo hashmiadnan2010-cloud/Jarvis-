@@ -62,11 +62,11 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
         const normalizedX = (i - bars / 2) / (bars / 2);
         const bellCurve = Math.exp(-Math.pow(normalizedX * 1.8, 2));
 
-        let amplitude = 4;
+        let amplitude = isListening ? 6 * bellCurve + 3 : 3;
         if (isSpeaking) {
           amplitude = (Math.sin(phase * 4 + i * 0.4) * 0.5 + 0.5) * 45 * bellCurve + 8;
-        } else if (isListening) {
-          amplitude = (Math.sin(phase * 2 + i * 0.3) * 0.5 + 0.5) * 26 * bellCurve + 6;
+        } else if (wakeWordDetected) {
+          amplitude = (Math.sin(phase * 2.4 + i * 0.3) * 0.5 + 0.5) * 28 * bellCurve + 8;
         } else if (isProcessing) {
           amplitude = (Math.sin(phase * 6 + i * 0.6) * 0.5 + 0.5) * 35 * bellCurve + 8;
         }
@@ -150,18 +150,21 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
 
         {/* Pulsating Arc Reactor Core */}
         <button
-          onClick={() => {
-            jarvisAudio.playWakeWordDetected();
-            onToggleMic();
-          }}
-          title={isListening ? 'Click to pause voice recognition' : 'Click to activate voice listening'}
+          onClick={onToggleMic}
+          title={
+            wakeWordDetected
+              ? 'Active listening open (tap to return to standby)'
+              : isListening
+              ? `Always-On Standby for "Hey ${wakeWord}" (tap to speak immediately)`
+              : 'Tap to enable Always-On Mic Standby'
+          }
           className={`group relative w-32 h-32 sm:w-36 sm:h-36 rounded-full flex flex-col items-center justify-center cursor-pointer transition-all duration-500 z-10 ${
             wakeWordDetected
-              ? 'bg-gradient-to-tr from-amber-600/40 via-amber-400/20 to-black shadow-[0_0_50px_rgba(245,158,11,0.7)] border-2 border-amber-400'
+              ? 'bg-gradient-to-tr from-amber-600/40 via-amber-400/20 to-black shadow-[0_0_50px_rgba(245,158,11,0.7)] border-2 border-amber-400 animate-pulse-glow'
               : isSpeaking
               ? 'bg-gradient-to-tr from-cyan-600/40 via-sky-400/20 to-black shadow-[0_0_50px_rgba(0,240,255,0.7)] border-2 border-cyan-300'
               : isListening
-              ? 'bg-gradient-to-tr from-cyan-950 via-cyan-900/40 to-black shadow-[0_0_35px_rgba(0,240,255,0.4)] border border-cyan-400/80 animate-pulse-glow'
+              ? 'bg-slate-950/90 border border-emerald-500/60 hover:border-cyan-400/80 shadow-[0_0_22px_rgba(16,185,129,0.2)]'
               : 'bg-black/80 border border-slate-700 hover:border-cyan-500/60'
           }`}
         >
@@ -173,21 +176,25 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
                 : isSpeaking
                 ? 'bg-cyan-400/30'
                 : isListening
-                ? 'bg-cyan-500/20'
+                ? 'bg-emerald-950/50'
                 : 'bg-slate-800/40'
             }`}
           >
             {isSpeaking ? (
               <Volume2 className="w-8 h-8 text-cyan-300 animate-bounce" />
             ) : isListening ? (
-              <Mic className="w-8 h-8 text-cyan-400 group-hover:scale-110 transition-transform" />
+              <Mic
+                className={`w-8 h-8 group-hover:scale-110 transition-transform ${
+                  wakeWordDetected ? 'text-amber-300' : 'text-emerald-400'
+                }`}
+              />
             ) : (
               <MicOff className="w-8 h-8 text-slate-500 group-hover:text-cyan-400 transition-colors" />
             )}
           </div>
 
           <span className="text-[10px] font-orbitron font-bold tracking-widest mt-1 uppercase text-cyan-300/90">
-            {wakeWordDetected ? 'ACTIVE' : isSpeaking ? 'VOICE OUT' : isListening ? 'LISTENING' : 'OFFLINE'}
+            {wakeWordDetected ? 'ACTIVE' : isSpeaking ? 'VOICE OUT' : isListening ? 'STANDBY ON' : 'OFFLINE'}
           </span>
         </button>
       </div>

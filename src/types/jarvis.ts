@@ -2,6 +2,7 @@ export type IntentType =
   | 'WHATSAPP_SEND'
   | 'CALL_CONTACT'
   | 'SET_LANGUAGE'
+  | 'DEVICE_SETTING'
   | 'SYSTEM_VOLUME'
   | 'SYSTEM_BRIGHTNESS'
   | 'LAUNCH_APP'
@@ -49,6 +50,9 @@ export interface SystemState {
   activeAppId: string;
   theme: 'hologram-cyan' | 'stark-gold' | 'neon-red';
   isScreenLocked: boolean;
+  ringerMode?: 'normal' | 'vibrate' | 'silent';
+  wifiEnabled?: boolean;
+  networkType?: string;
 }
 
 export type PersonalityMode = 'balanced' | 'friend' | 'formal';
@@ -91,6 +95,9 @@ export interface CommandLog {
     noteContent?: string;
     targetLanguage?: string;
     targetLanguageCode?: string;
+    settingType?: string;
+    settingAction?: string;
+    ringerMode?: 'normal' | 'vibrate' | 'silent';
   };
   quickFollowUps?: string[];
 }

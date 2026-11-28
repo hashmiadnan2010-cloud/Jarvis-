@@ -8,12 +8,18 @@ import {
   Wifi,
   Battery,
   Lock,
-  Camera,
   Layers,
   ExternalLink,
-  Play,
   RotateCcw,
   Zap,
+  Bell,
+  Vibrate,
+  BellOff,
+  Bluetooth,
+  Flashlight,
+  MapPin,
+  Signal,
+  Smartphone,
 } from 'lucide-react';
 import { SystemState, PCApp } from '../types/jarvis';
 import { jarvisAudio } from '../utils/audioFx';
@@ -28,6 +34,12 @@ interface PCControlsPanelProps {
   onBoostMemory: () => void;
   onSetBatteryLevel?: (level: number) => void;
   onTogglePowerSaving?: () => void;
+  onSetRingerMode?: (mode: 'normal' | 'vibrate' | 'silent') => void;
+  onControlDeviceSetting?: (
+    settingType: string,
+    action: 'on' | 'off' | 'toggle' | 'open',
+    label?: string
+  ) => void;
 }
 
 export const PCControlsPanel: React.FC<PCControlsPanelProps> = ({
@@ -40,6 +52,8 @@ export const PCControlsPanel: React.FC<PCControlsPanelProps> = ({
   onBoostMemory,
   onSetBatteryLevel,
   onTogglePowerSaving,
+  onSetRingerMode,
+  onControlDeviceSetting,
 }) => {
   return (
     <div className="space-y-6">
@@ -120,10 +134,12 @@ export const PCControlsPanel: React.FC<PCControlsPanelProps> = ({
               'CRITICAL < 15%'
             ) : systemState.isPowerSavingMode ? (
               '⚡ POWER-SAVING'
-            ) : (
+            ) : systemState.isCharging ? (
               <>
-                <Zap className="w-2.5 h-2.5" /> ARC PLUGGED IN
+                <Zap className="w-2.5 h-2.5" /> CHARGING
               </>
+            ) : (
+              'ON PHONE BATTERY'
             )}
           </span>
         </div>
@@ -132,9 +148,11 @@ export const PCControlsPanel: React.FC<PCControlsPanelProps> = ({
         <div className="p-3 rounded-xl border border-cyan-500/20 bg-black/60 relative overflow-hidden">
           <div className="flex items-center justify-between text-xs font-mono text-slate-400 mb-1">
             <span className="flex items-center gap-1.5 text-indigo-400">
-              <Wifi className="w-3.5 h-3.5" /> LATENCY
+              <Wifi className="w-3.5 h-3.5" /> NETWORK
             </span>
-            <span className="font-bold text-white">{systemState.networkPing} ms</span>
+            <span className="font-bold text-white uppercase">
+              {systemState.networkType || (systemState.wifiEnabled ? 'WIFI' : 'ONLINE')}
+            </span>
           </div>
           <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
             <div
@@ -142,7 +160,9 @@ export const PCControlsPanel: React.FC<PCControlsPanelProps> = ({
               style={{ width: `${Math.min(100, systemState.networkPing * 2)}%` }}
             />
           </div>
-          <span className="text-[10px] text-slate-500 font-mono mt-1 block">STARLINK SECURE PROTOCOL</span>
+          <span className="text-[10px] text-slate-500 font-mono mt-1 block">
+            {systemState.wifiEnabled ? 'WI-FI ACTIVE' : 'CELLULAR / STANDBY'} // {systemState.networkPing} ms
+          </span>
         </div>
       </div>
 
@@ -263,6 +283,82 @@ export const PCControlsPanel: React.FC<PCControlsPanelProps> = ({
                 {p.label}
               </button>
             ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Phone Hardware & Sound Modes */}
+      <div className="p-4 rounded-xl border border-cyan-500/30 bg-black/70 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs font-orbitron font-bold text-white flex items-center gap-2">
+            <Smartphone className="w-4 h-4 text-cyan-400" />
+            PHONE HARDWARE &amp; SOUND MODES
+          </div>
+          <div className="text-[10px] font-mono text-cyan-300">
+            ACTIVE PROFILE: {(systemState.ringerMode || 'normal').toUpperCase()} // BATTERY: {systemState.batteryLevel}%
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Ringer / Sound Profiles */}
+          <div className="space-y-2">
+            <div className="text-[10px] font-mono text-slate-400 uppercase">
+              Sound Profile (Normal / Vibration / Silent)
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'normal' as const, label: 'Normal', icon: Bell },
+                { id: 'vibrate' as const, label: 'Vibrate', icon: Vibrate },
+                { id: 'silent' as const, label: 'Silent', icon: BellOff },
+              ].map((profile) => {
+                const Icon = profile.icon;
+                const active = (systemState.ringerMode || 'normal') === profile.id;
+                return (
+                  <button
+                    key={profile.id}
+                    onClick={() => onSetRingerMode?.(profile.id)}
+                    className={`py-2.5 px-3 rounded-lg border text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      active
+                        ? 'border-cyan-400 bg-cyan-500 text-black shadow-[0_0_15px_rgba(0,240,255,0.35)]'
+                        : 'border-slate-800 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-white'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span>{profile.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Connectivity & Hardware Panels */}
+          <div className="space-y-2">
+            <div className="text-[10px] font-mono text-slate-400 uppercase">
+              Connectivity &amp; Quick Settings
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { type: 'wifi', action: 'toggle' as const, label: 'Wi-Fi', icon: Wifi },
+                { type: 'network', action: 'open' as const, label: 'Network / Data', icon: Signal },
+                { type: 'bluetooth', action: 'open' as const, label: 'Bluetooth', icon: Bluetooth },
+                { type: 'flashlight', action: 'on' as const, label: 'Torch On', icon: Flashlight },
+                { type: 'flashlight', action: 'off' as const, label: 'Torch Off', icon: Flashlight },
+                { type: 'battery_saver', action: 'open' as const, label: 'Battery Saver', icon: Battery },
+                { type: 'location', action: 'open' as const, label: 'Location', icon: MapPin },
+              ].map((ctrl) => {
+                const Icon = ctrl.icon;
+                return (
+                  <button
+                    key={`${ctrl.type}-${ctrl.action}`}
+                    onClick={() => onControlDeviceSetting?.(ctrl.type, ctrl.action, ctrl.label)}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900/80 hover:border-cyan-400/60 hover:bg-cyan-950/40 text-slate-200 text-xs font-mono flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Icon className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>{ctrl.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>

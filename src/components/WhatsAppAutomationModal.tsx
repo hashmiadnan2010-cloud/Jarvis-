@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { Send, Phone, User, Check, CheckCheck, ExternalLink, Plus, MessageSquare, AlertCircle } from 'lucide-react';
 import { Contact } from '../types/jarvis';
 import { jarvisAudio } from '../utils/audioFx';
+import {
+  getAndroidBackgroundStatus,
+  requestAccessibilityAutoSendPermission,
+} from '../utils/androidBridge';
 
 interface WhatsAppAutomationModalProps {
   contacts: Contact[];
@@ -145,13 +149,35 @@ export const WhatsAppAutomationModal: React.FC<WhatsAppAutomationModalProps> = (
             </p>
           </div>
         </div>
-        <button
-          onClick={() => setShowAddContact(!showAddContact)}
-          className="text-xs font-mono flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/40 transition-colors"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>ADD CONTACT</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {getAndroidBackgroundStatus().isNativeAndroid && (
+            <button
+              type="button"
+              onClick={() => {
+                jarvisAudio.playTerminalTick();
+                requestAccessibilityAutoSendPermission();
+              }}
+              className={`text-xs font-mono flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors cursor-pointer ${
+                getAndroidBackgroundStatus().accessibilityEnabled
+                  ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300'
+                  : 'border-amber-500/40 bg-amber-950/30 text-amber-300 hover:bg-amber-900/40'
+              }`}
+              title="Enable zero-tap WhatsApp sending via Android Accessibility Service"
+            >
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span>
+                {getAndroidBackgroundStatus().accessibilityEnabled ? 'AUTO-SEND ON' : 'ENABLE AUTO-SEND'}
+              </span>
+            </button>
+          )}
+          <button
+            onClick={() => setShowAddContact(!showAddContact)}
+            className="text-xs font-mono flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/40 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>ADD CONTACT</span>
+          </button>
+        </div>
       </div>
 
       {/* Add Contact Modal Drawer */}

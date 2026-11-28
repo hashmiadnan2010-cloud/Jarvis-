@@ -7,6 +7,7 @@ import {
   AndroidBackgroundStatus,
   getAndroidBackgroundStatus,
   openAndroidDefaultAssistantSettings,
+  requestAccessibilityAutoSendPermission,
   requestOverlayDisplayPermission,
   requestUnrestrictedBatteryPermission,
 } from '../utils/androidBridge';
@@ -348,7 +349,7 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => {
@@ -398,6 +399,32 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1 leading-tight">
                   Prevents Android from sleeping background voice listener
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  jarvisAudio.playTerminalTick();
+                  requestAccessibilityAutoSendPermission();
+                }}
+                className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                  bgStatus.accessibilityEnabled
+                    ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-200'
+                    : 'border-amber-500/40 bg-slate-900/80 text-amber-200 hover:border-amber-400'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold font-mono">
+                  <span className="flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    WhatsApp Auto-Send
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-black/50">
+                    {bgStatus.isNativeAndroid ? (bgStatus.accessibilityEnabled ? 'ACTIVE' : 'ENABLE') : 'APK'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1 leading-tight">
+                  Sends WhatsApp messages directly without tapping the Send button
                 </div>
               </button>
 

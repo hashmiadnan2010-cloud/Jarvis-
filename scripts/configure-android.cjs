@@ -10,6 +10,13 @@ const permissions = [
   '<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />',
   '<uses-permission android:name="android.permission.CAMERA" />',
   '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+  '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />',
+  '<uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />',
+  '<uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />',
+  '<uses-permission android:name="android.permission.WRITE_SETTINGS" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
   '<uses-permission android:name="android.permission.CALL_PHONE" />',
   '<uses-permission android:name="android.permission.READ_CONTACTS" />',
   '<uses-permission android:name="android.permission.WAKE_LOCK" />',
@@ -93,9 +100,32 @@ if (!manifest.includes('JarvisBootReceiver')) {
   manifest = manifest.replace('</application>', `${receiverDecl}    </application>`);
 }
 
-// Replace or add <queries> block so Android 11+ can resolve WhatsApp, YouTube, Spotify, Dialer, Chrome, etc.
+if (!manifest.includes('JarvisAccessibilityService')) {
+  const a11yDecl = [
+    '        <service',
+    '            android:name=".JarvisAccessibilityService"',
+    '            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"',
+    '            android:label="JARVIS Direct Auto-Send"',
+    '            android:exported="true">',
+    '            <intent-filter>',
+    '                <action android:name="android.accessibilityservice.AccessibilityService" />',
+    '            </intent-filter>',
+    '            <meta-data',
+    '                android:name="android.accessibilityservice"',
+    '                android:resource="@xml/jarvis_accessibility_config" />',
+    '        </service>',
+    '',
+  ].join('\n');
+  manifest = manifest.replace('</application>', `${a11yDecl}    </application>`);
+}
+
+// Replace or add <queries> block so Android 11+ can resolve ALL installed launcher apps (Insta, Calendar, Dialer, Truecaller, Google, Free Fire, etc.)
 const queriesBlock = [
   '    <queries>',
+  '        <intent>',
+  '            <action android:name="android.intent.action.MAIN" />',
+  '            <category android:name="android.intent.category.LAUNCHER" />',
+  '        </intent>',
   '        <package android:name="com.whatsapp" />',
   '        <package android:name="com.whatsapp.w4b" />',
   '        <package android:name="com.google.android.youtube" />',
@@ -104,6 +134,29 @@ const queriesBlock = [
   '        <package android:name="org.telegram.messenger" />',
   '        <package android:name="com.google.android.apps.maps" />',
   '        <package android:name="com.android.chrome" />',
+  '        <package android:name="com.truecaller" />',
+  '        <package android:name="com.dts.freefireth" />',
+  '        <package android:name="com.dts.freefiremax" />',
+  '        <package android:name="com.google.android.calendar" />',
+  '        <package android:name="com.android.calendar" />',
+  '        <package android:name="com.samsung.android.calendar" />',
+  '        <package android:name="com.google.android.dialer" />',
+  '        <package android:name="com.android.dialer" />',
+  '        <package android:name="com.google.android.googlequicksearchbox" />',
+  '        <package android:name="com.google.android.gm" />',
+  '        <package android:name="com.android.vending" />',
+  '        <package android:name="com.snapchat.android" />',
+  '        <package android:name="com.facebook.katana" />',
+  '        <package android:name="com.phonepe.app" />',
+  '        <package android:name="net.one97.paytm" />',
+  '        <package android:name="com.google.android.apps.nbu.paisa.user" />',
+  '        <package android:name="com.pubg.imobile" />',
+  '        <package android:name="com.netflix.mediaclient" />',
+  '        <package android:name="in.startv.hotstar" />',
+  '        <package android:name="com.amazon.mShop.android.shopping" />',
+  '        <package android:name="com.flipkart.android" />',
+  '        <package android:name="com.google.android.apps.photos" />',
+  '        <package android:name="com.android.settings" />',
   '        <intent>',
   '            <action android:name="android.intent.action.VIEW" />',
   '            <data android:scheme="https" />',
@@ -115,6 +168,19 @@ const queriesBlock = [
   '        <intent>',
   '            <action android:name="android.intent.action.CALL" />',
   '            <data android:scheme="tel" />',
+  '        </intent>',
+  '        <intent>',
+  '            <action android:name="android.intent.action.SEARCH" />',
+  '        </intent>',
+  '        <intent>',
+  '            <action android:name="android.intent.action.WEB_SEARCH" />',
+  '        </intent>',
+  '        <intent>',
+  '            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />',
+  '        </intent>',
+  '        <intent>',
+  '            <action android:name="android.intent.action.SEND" />',
+  '            <data android:mimeType="text/plain" />',
   '        </intent>',
   '        <intent>',
   '            <action android:name="android.speech.RecognitionService" />',
@@ -130,6 +196,48 @@ if (manifest.includes('<queries>')) {
 }
 
 fs.writeFileSync(manifestPath, manifest);
+
+// 1b. Write Accessibility Service XML config & description string for zero-tap WhatsApp auto-send
+const xmlDir = path.join('android', 'app', 'src', 'main', 'res', 'xml');
+fs.mkdirSync(xmlDir, { recursive: true });
+const a11yXmlPath = path.join(xmlDir, 'jarvis_accessibility_config.xml');
+const a11yXml = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"',
+  '    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"',
+  '    android:accessibilityFeedbackType="feedbackGeneric"',
+  '    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"',
+  '    android:canRetrieveWindowContent="true"',
+  '    android:description="@string/jarvis_accessibility_desc"',
+  '    android:notificationTimeout="120"',
+  '    android:packageNames="com.whatsapp,com.whatsapp.w4b" />',
+  '',
+].join('\n');
+fs.writeFileSync(a11yXmlPath, a11yXml);
+
+const valuesDir = path.join('android', 'app', 'src', 'main', 'res', 'values');
+fs.mkdirSync(valuesDir, { recursive: true });
+const stringsXmlPath = path.join(valuesDir, 'strings.xml');
+const a11yDesc = 'Allows JARVIS to press the WhatsApp Send button automatically only when you explicitly command JARVIS to send a WhatsApp message.';
+if (fs.existsSync(stringsXmlPath)) {
+  let stringsXml = fs.readFileSync(stringsXmlPath, 'utf8');
+  if (!stringsXml.includes('jarvis_accessibility_desc')) {
+    stringsXml = stringsXml.replace(
+      '</resources>',
+      `    <string name="jarvis_accessibility_desc">${a11yDesc}</string>\n</resources>`
+    );
+    fs.writeFileSync(stringsXmlPath, stringsXml);
+  }
+} else {
+  const defaultStringsXml = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<resources>',
+    `    <string name="jarvis_accessibility_desc">${a11yDesc}</string>`,
+    '</resources>',
+    '',
+  ].join('\n');
+  fs.writeFileSync(stringsXmlPath, defaultStringsXml);
+}
 
 // 2. Copy Arc Reactor PNG icon into Android mipmap launcher folders
 const iconSrc = path.join('public', 'pwa-512x512.png');
@@ -241,6 +349,9 @@ public class JarvisBackgroundService extends Service {
     private SpeechRecognizer speechRecognizer;
     private Intent recognizerIntent;
     private boolean recognizerActive = false;
+    private boolean recognizerStarting = false;
+    private long lastStartAttemptMs = 0L;
+    private String lastPartialTranscript = "";
     private boolean listeningDesired = true;
     private boolean alwaysOnWakeWord = true;
     private String wakeWord = "jarvis";
@@ -262,7 +373,33 @@ public class JarvisBackgroundService extends Service {
             }
         }
         loadPrefs();
+        mainHandler.postDelayed(watchdogRunnable, 600L);
     }
+
+    private final Runnable watchdogRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (isServiceRunning) {
+                if (wakeLock != null && !wakeLock.isHeld()) {
+                    try {
+                        wakeLock.acquire(10 * 60 * 1000L);
+                    } catch (Exception ignored) {
+                    }
+                }
+                long now = System.currentTimeMillis();
+                if (recognizerStarting && !recognizerActive && (now - lastStartAttemptMs > 2500L)) {
+                    resetRecognizerInstance();
+                }
+                if (shouldListenNow() && !recognizerActive && !recognizerStarting) {
+                    startRecognizerIfNeeded();
+                }
+                if (shouldListenNow()) {
+                    broadcastState(true);
+                }
+                mainHandler.postDelayed(this, 600L);
+            }
+        }
+    };
 
     private void loadPrefs() {
         SharedPreferences prefs = getSharedPreferences("jarvis_prefs", MODE_PRIVATE);
@@ -285,11 +422,15 @@ public class JarvisBackgroundService extends Service {
         } else if (ACTION_START_LISTENING.equals(action)) {
             listeningDesired = true;
             getSharedPreferences("jarvis_prefs", MODE_PRIVATE).edit().putBoolean("listeningDesired", true).apply();
+            mainHandler.removeCallbacks(watchdogRunnable);
+            mainHandler.postDelayed(watchdogRunnable, 600L);
         } else if (ACTION_TTS_STATE.equals(action) && intent != null) {
             boolean speaking = intent.getBooleanExtra("speaking", false);
             isTtsSpeaking = speaking;
-            if (!speaking && shouldListenNow()) {
-                scheduleRecognizerRestart(350);
+            if (speaking) {
+                mainHandler.post(this::pauseRecognizerForTts);
+            } else if (shouldListenNow()) {
+                scheduleRecognizerRestart(15);
             }
         } else if (ACTION_RELOAD_CONFIG.equals(action)) {
             if (recognizerIntent != null) {
@@ -370,12 +511,17 @@ public class JarvisBackgroundService extends Service {
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLang != null ? recognitionLang : "en-US");
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 550L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 400L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 450L);
 
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
             @Override
             public void onReadyForSpeech(Bundle params) {
+                recognizerStarting = false;
                 recognizerActive = true;
+                lastPartialTranscript = "";
                 broadcastState(true);
             }
 
@@ -395,17 +541,30 @@ public class JarvisBackgroundService extends Service {
 
             @Override
             public void onError(int error) {
+                recognizerStarting = false;
                 recognizerActive = false;
+                if ((error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+                        && !lastPartialTranscript.isEmpty() && !isTtsSpeaking) {
+                    String rescued = lastPartialTranscript;
+                    lastPartialTranscript = "";
+                    handleRecognizedPhrase(rescued, true);
+                } else {
+                    lastPartialTranscript = "";
+                }
+
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                    listeningDesired = false;
                     broadcastState(false);
                     return;
                 }
                 if (shouldListenNow()) {
-                    long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_AUDIO) ? 900L : 350L;
-                    if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
+                    boolean needsReset =
+                        error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                        error == SpeechRecognizer.ERROR_CLIENT ||
+                        error == SpeechRecognizer.ERROR_AUDIO;
+                    if (needsReset) {
                         resetRecognizerInstance();
                     }
+                    long delay = needsReset ? 160L : 20L;
                     scheduleRecognizerRestart(delay);
                 } else {
                     broadcastState(false);
@@ -414,22 +573,30 @@ public class JarvisBackgroundService extends Service {
 
             @Override
             public void onResults(Bundle results) {
+                recognizerStarting = false;
                 recognizerActive = false;
-                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (matches != null && !matches.isEmpty() && !isTtsSpeaking) {
-                    String text = matches.get(0);
+                ArrayList<String> matches = results != null
+                    ? results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    : null;
+                String text = pickBestWakeMatch(matches);
+                if (text.isEmpty()) text = lastPartialTranscript;
+                lastPartialTranscript = "";
+                if (text != null && !text.trim().isEmpty() && !isTtsSpeaking) {
                     handleRecognizedPhrase(text, true);
                 }
                 if (shouldListenNow()) {
-                    scheduleRecognizerRestart(250);
+                    scheduleRecognizerRestart(20);
                 }
             }
 
             @Override
             public void onPartialResults(Bundle partialResults) {
-                ArrayList<String> matches = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (matches != null && !matches.isEmpty() && !isTtsSpeaking) {
-                    String text = matches.get(0);
+                ArrayList<String> matches = partialResults != null
+                    ? partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    : null;
+                String text = pickBestWakeMatch(matches);
+                if (text != null && !text.trim().isEmpty() && !isTtsSpeaking) {
+                    lastPartialTranscript = text;
                     handleRecognizedPhrase(text, false);
                 }
             }
@@ -437,6 +604,17 @@ public class JarvisBackgroundService extends Service {
             @Override
             public void onEvent(int eventType, Bundle params) {}
         });
+    }
+
+    private String pickBestWakeMatch(ArrayList<String> matches) {
+        if (matches == null || matches.isEmpty()) return "";
+        for (String m : matches) {
+            if (m != null && !m.trim().isEmpty() && containsWakeWord(m)) {
+                return m.trim();
+            }
+        }
+        String first = matches.get(0);
+        return first != null ? first.trim() : "";
     }
 
     private void handleRecognizedPhrase(String text, boolean isFinal) {
@@ -452,10 +630,10 @@ public class JarvisBackgroundService extends Service {
             return;
         }
 
-        // App is in background: check for wake word to pop JARVIS open automatically like Google Assistant!
-        if (alwaysOnWakeWord && isFinal && containsWakeWord(text)) {
+        // App is in background: wake immediately even on partial results when wake word is heard!
+        if (alwaysOnWakeWord && containsWakeWord(text)) {
             long now = System.currentTimeMillis();
-            if (now - lastWakeLaunchMs > 2000L) {
+            if (now - lastWakeLaunchMs > 1500L) {
                 lastWakeLaunchMs = now;
                 wakeMainActivityFromBackground(text);
             }
@@ -463,10 +641,19 @@ public class JarvisBackgroundService extends Service {
     }
 
     private boolean containsWakeWord(String transcript) {
-        String lower = transcript.toLowerCase(Locale.ROOT);
-        if (lower.contains(wakeWord)) return true;
-        if (lower.contains("jarvis") || lower.contains("hey jarvis")) return true;
-        return false;
+        String lower = transcript.toLowerCase(Locale.ROOT).trim();
+        String normalizedWake = wakeWord.replaceFirst("^(hey|hay|he|ey|ok|okay|hi|hello|yo)[,\\\\s]+", "").trim();
+        if (normalizedWake.isEmpty()) normalizedWake = "jarvis";
+        boolean standardWake = lower.matches(".*\\\\b(?:(?:hey|hay|he|ey|a|ok|okay|hi|hello|yo)[,\\\\s]+)?" + java.util.regex.Pattern.quote(normalizedWake) + "\\\\b.*")
+            || lower.matches(".*\\\\b(?:(?:hey|hay|he|ey|a|ok|okay|hi|hello|yo)[,\\\\s]+)?(?:jarvis|jarvish|jarvas|jarvice|jarves|jarviz|javis|jervis|charvis|jarwis)\\\\b.*")
+            || transcript.matches(".*(?:हे|ऐ|अरे|ओ|सुनो)?[\\\\s,]*(?:जार्विस|जर्विस|जरविस|जार्विश).*");
+        if (standardWake) return true;
+
+        boolean directAppWake = lower.matches(".*\\\\b(?:hey|hay|he|ey|a|ok|hi)[,\\\\s]+(?:youtube|yt|google|spotify)\\\\b.*")
+            || transcript.matches(".*(?:हे|ऐ|ओ)[\\\\s,]+(?:youtube|यूट्यूब|google|गूगल|spotify|स्पॉटिफाई).*");
+        boolean hasCommandVerb = lower.matches(".*\\\\b(?:search|find|watch|play|open|show|karo|chalao|kholo|dikhao)\\\\b.*")
+            || transcript.matches(".*(?:सर्च|खोजो|ढूंढो|चलाओ|दिखाओ|खोलो).*");
+        return directAppWake && hasCommandVerb;
     }
 
     private void wakeMainActivityFromBackground(String fullCommand) {
@@ -486,20 +673,36 @@ public class JarvisBackgroundService extends Service {
     }
 
     private void startRecognizerIfNeeded() {
-        if (!shouldListenNow() || recognizerActive) return;
+        if (!shouldListenNow() || recognizerActive || recognizerStarting) return;
         try {
             ensureSpeechRecognizer();
             if (speechRecognizer != null && recognizerIntent != null) {
+                recognizerStarting = true;
+                lastStartAttemptMs = System.currentTimeMillis();
                 recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLang != null ? recognitionLang : "en-US");
                 speechRecognizer.startListening(recognizerIntent);
             }
         } catch (Exception ignored) {
-            scheduleRecognizerRestart(800);
+            recognizerStarting = false;
+            resetRecognizerInstance();
+            scheduleRecognizerRestart(350);
         }
+    }
+
+    private void pauseRecognizerForTts() {
+        recognizerStarting = false;
+        if (speechRecognizer != null) {
+            try {
+                speechRecognizer.cancel();
+            } catch (Exception ignored) {
+            }
+        }
+        recognizerActive = false;
     }
 
     private void stopRecognizerInternal() {
         mainHandler.removeCallbacksAndMessages(null);
+        recognizerStarting = false;
         if (speechRecognizer != null) {
             try {
                 speechRecognizer.stopListening();
@@ -511,6 +714,7 @@ public class JarvisBackgroundService extends Service {
     }
 
     private void resetRecognizerInstance() {
+        recognizerStarting = false;
         if (speechRecognizer != null) {
             try {
                 speechRecognizer.destroy();
@@ -523,7 +727,7 @@ public class JarvisBackgroundService extends Service {
 
     private void scheduleRecognizerRestart(long delayMs) {
         mainHandler.postDelayed(() -> {
-            if (shouldListenNow() && !recognizerActive) {
+            if (shouldListenNow() && !recognizerActive && !recognizerStarting) {
                 startRecognizerIfNeeded();
             }
         }, delayMs);
@@ -574,23 +778,181 @@ public class JarvisBackgroundService extends Service {
 `;
 fs.writeFileSync(servicePath, serviceCode);
 
-// 5. Generate MainActivity.java with native bridge, Assist intent handling, Overlay/Battery/Assistant settings, and Service sync
+// 4b. Generate JarvisAccessibilityService.java for zero-tap WhatsApp direct auto-send
+const accessibilityPath = path.join(javaDir, 'JarvisAccessibilityService.java');
+const accessibilityCode = `package com.jarvis.assistant;
+
+import android.accessibilityservice.AccessibilityService;
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
+import java.util.List;
+
+public class JarvisAccessibilityService extends AccessibilityService {
+    public static volatile boolean isServiceConnected = false;
+    private static volatile boolean pendingWhatsAppSend = false;
+    private static volatile long pendingDeadlineMs = 0L;
+    private static volatile String pendingMessageText = "";
+    private static volatile long lastClickMs = 0L;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    public static void armWhatsAppAutoSend(String message) {
+        pendingMessageText = message != null ? message.trim() : "";
+        pendingDeadlineMs = System.currentTimeMillis() + 18000L;
+        pendingWhatsAppSend = true;
+    }
+
+    public static boolean isEnabled(Context ctx) {
+        if (isServiceConnected) return true;
+        try {
+            String enabledServices = Settings.Secure.getString(
+                ctx.getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            );
+            return enabledServices != null && enabledServices.contains(ctx.getPackageName() + "/");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        isServiceConnected = true;
+    }
+
+    @Override
+    public void onInterrupt() {}
+
+    @Override
+    public void onDestroy() {
+        isServiceConnected = false;
+        super.onDestroy();
+    }
+
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (!pendingWhatsAppSend) return;
+        long now = System.currentTimeMillis();
+        if (now > pendingDeadlineMs) {
+            pendingWhatsAppSend = false;
+            return;
+        }
+        if (event == null || event.getPackageName() == null) return;
+        String pkg = event.getPackageName().toString();
+        if (!"com.whatsapp".equals(pkg) && !"com.whatsapp.w4b".equals(pkg)) return;
+
+        tryClickWhatsAppSend(pkg);
+        handler.postDelayed(() -> {
+            if (pendingWhatsAppSend && System.currentTimeMillis() <= pendingDeadlineMs) {
+                tryClickWhatsAppSend(pkg);
+            }
+        }, 350L);
+    }
+
+    private void tryClickWhatsAppSend(String pkg) {
+        if (!pendingWhatsAppSend) return;
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return;
+
+        try {
+            // Confirm text is actually filled inside WhatsApp entry field before tapping Send
+            boolean hasTextInEntry = hasNonEmptyEntry(root, pkg + ":id/entry")
+                || hasNonEmptyEntry(root, "com.whatsapp:id/entry")
+                || hasNonEmptyEntry(root, "com.whatsapp.w4b:id/entry");
+            if (!hasTextInEntry) return;
+
+            AccessibilityNodeInfo sendBtn = findClickableById(root, pkg + ":id/send");
+            if (sendBtn == null) sendBtn = findClickableById(root, "com.whatsapp:id/send");
+            if (sendBtn == null) sendBtn = findClickableById(root, "com.whatsapp.w4b:id/send");
+            if (sendBtn == null) sendBtn = findClickableByContentDesc(root);
+
+            if (sendBtn != null) {
+                long now = System.currentTimeMillis();
+                if (now - lastClickMs < 1500L) return;
+                lastClickMs = now;
+                pendingWhatsAppSend = false;
+                sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean hasNonEmptyEntry(AccessibilityNodeInfo root, String viewId) {
+        List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(viewId);
+        if (nodes == null || nodes.isEmpty()) return false;
+        for (AccessibilityNodeInfo node : nodes) {
+            if (node != null && node.getText() != null && !node.getText().toString().trim().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private AccessibilityNodeInfo findClickableById(AccessibilityNodeInfo root, String viewId) {
+        List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(viewId);
+        if (nodes == null) return null;
+        for (AccessibilityNodeInfo node : nodes) {
+            if (node != null && node.isVisibleToUser() && node.isEnabled()) {
+                if (node.isClickable()) return node;
+                AccessibilityNodeInfo parent = node.getParent();
+                if (parent != null && parent.isClickable()) return parent;
+            }
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo findClickableByContentDesc(AccessibilityNodeInfo node) {
+        if (node == null) return null;
+        CharSequence desc = node.getContentDescription();
+        if (desc != null && node.isVisibleToUser() && node.isEnabled() && node.isClickable()) {
+            String d = desc.toString().trim().toLowerCase();
+            if ("send".equals(d) || "भेजें".equals(d)) {
+                return node;
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo hit = findClickableByContentDesc(node.getChild(i));
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+}
+`;
+fs.writeFileSync(accessibilityPath, accessibilityCode);
+
+// 5. Generate MainActivity.java with native bridge, Assist intent handling, Overlay/Battery/Accessibility/Assistant settings, and Service sync
 const mainActivityPath = path.join(javaDir, 'MainActivity.java');
 const mainActivityCode = `package com.jarvis.assistant;
 
 import android.Manifest;
+import android.app.ActivityManager;
+import android.app.NotificationManager;
+import android.app.SearchManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.hardware.camera2.CameraManager;
+import android.media.AudioManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.ContactsContract;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
@@ -600,9 +962,15 @@ import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.TimeZone;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -721,6 +1089,7 @@ public class MainActivity extends BridgeActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == PERMISSION_REQUEST_CODE) {
             ensureBackgroundServiceIfAllowed();
+            dispatchJsEvent("jarvis-permissions-updated", "{}");
         }
     }
 
@@ -758,24 +1127,37 @@ public class MainActivity extends BridgeActivity {
                     @Override
                     public void onStart(String utteranceId) {
                         JarvisBackgroundService.isTtsSpeaking = true;
+                        notifyServiceTtsState(true);
                         dispatchJsEvent("jarvis-native-tts", "{\\"state\\":\\"start\\"}");
                     }
 
                     @Override
                     public void onDone(String utteranceId) {
                         JarvisBackgroundService.isTtsSpeaking = false;
+                        notifyServiceTtsState(false);
                         dispatchJsEvent("jarvis-native-tts", "{\\"state\\":\\"end\\"}");
                     }
 
                     @Override
                     public void onError(String utteranceId) {
                         JarvisBackgroundService.isTtsSpeaking = false;
+                        notifyServiceTtsState(false);
                         dispatchJsEvent("jarvis-native-tts", "{\\"state\\":\\"end\\"}");
                     }
                 });
                 ttsReady = true;
             }
         });
+    }
+
+    private void notifyServiceTtsState(boolean speaking) {
+        try {
+            Intent serviceIntent = new Intent(MainActivity.this, JarvisBackgroundService.class);
+            serviceIntent.setAction(JarvisBackgroundService.ACTION_TTS_STATE);
+            serviceIntent.putExtra("speaking", speaking);
+            startService(serviceIntent);
+        } catch (Exception ignored) {
+        }
     }
 
     private void dispatchJsEvent(String eventName, String detailJson) {
@@ -826,10 +1208,27 @@ public class MainActivity extends BridgeActivity {
     }
 
     public class JarvisNativeBridge {
-        @JavascriptInterface
-        public boolean openApp(String packageName, String fallbackUrl) {
+        private String normalizeAppToken(String value) {
+            if (value == null) return "";
+            return value.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
+        }
+
+        private String expandAppAlias(String norm) {
+            if ("insta".equals(norm) || "ig".equals(norm)) return "instagram";
+            if ("yt".equals(norm)) return "youtube";
+            if ("wa".equals(norm)) return "whatsapp";
+            if ("freefire".equals(norm) || "freefire".equals(norm) || "freefiremax".equals(norm) || "ff".equals(norm)) return "freefire";
+            if ("freef".equals(norm) || "freefiree".equals(norm) || "freefiregame".equals(norm)) return "freefire";
+            if ("call".equals(norm) || "dialer".equals(norm) || "phonedialer".equals(norm) || "phoneapp".equals(norm)) return "phone";
+            if ("calender".equals(norm)) return "calendar";
+            if ("gpay".equals(norm) || "googlepay".equals(norm)) return "gpay";
+            if ("playstore".equals(norm)) return "playstore";
+            if ("browser".equals(norm)) return "chrome";
+            return norm;
+        }
+
+        private boolean launchPackageOrActivity(PackageManager pm, String packageName, String activityName) {
             try {
-                PackageManager pm = getPackageManager();
                 if (packageName != null && !packageName.isEmpty()) {
                     Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
                     if (launchIntent != null) {
@@ -837,7 +1236,226 @@ public class MainActivity extends BridgeActivity {
                         startActivity(launchIntent);
                         return true;
                     }
+                    if (activityName != null && !activityName.isEmpty()) {
+                        Intent explicit = new Intent(Intent.ACTION_MAIN);
+                        explicit.addCategory(Intent.CATEGORY_LAUNCHER);
+                        explicit.setClassName(packageName, activityName);
+                        explicit.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(explicit);
+                        return true;
+                    }
                 }
+            } catch (Exception ignored) {
+            }
+            return false;
+        }
+
+        private int scoreAppMatch(String rawQuery, String normQuery, String expandedQuery, String rawLabel, String normLabel, String pkgLower) {
+            if (normLabel.isEmpty() && pkgLower.isEmpty()) return 0;
+            if (normLabel.equals(normQuery) || (!expandedQuery.isEmpty() && normLabel.equals(expandedQuery))) return 100;
+            if (rawLabel.equals(rawQuery)) return 95;
+            if (!normQuery.isEmpty() && normLabel.startsWith(normQuery)) return 88;
+            if (!expandedQuery.isEmpty() && normLabel.startsWith(expandedQuery)) return 86;
+            if (!normQuery.isEmpty() && normLabel.contains(normQuery)) return 78;
+            if (!expandedQuery.isEmpty() && normLabel.contains(expandedQuery)) return 76;
+            if (!normQuery.isEmpty() && normQuery.length() >= 3 && normQuery.contains(normLabel) && normLabel.length() >= 3) return 70;
+            if (!expandedQuery.isEmpty() && expandedQuery.length() >= 3 && expandedQuery.contains(normLabel) && normLabel.length() >= 3) return 68;
+            if (!normQuery.isEmpty() && normQuery.length() >= 3 && pkgLower.contains(normQuery)) return 62;
+            if (!expandedQuery.isEmpty() && expandedQuery.length() >= 3 && pkgLower.contains(expandedQuery)) return 60;
+
+            String probe = expandedQuery.isEmpty() ? normQuery : expandedQuery;
+            if (probe.length() >= 4 && normLabel.length() >= 4) {
+                int prefixMatch = 0;
+                int maxPrefix = Math.min(probe.length(), normLabel.length());
+                while (prefixMatch < maxPrefix && probe.charAt(prefixMatch) == normLabel.charAt(prefixMatch)) {
+                    prefixMatch++;
+                }
+                if (prefixMatch >= Math.max(4, Math.min(probe.length(), normLabel.length()) - 1)) {
+                    return 56;
+                }
+                int sharedBigrams = 0;
+                int totalBigrams = Math.max(1, probe.length() - 1);
+                for (int i = 0; i < probe.length() - 1; i++) {
+                    String bi = probe.substring(i, i + 2);
+                    if (normLabel.contains(bi)) {
+                        sharedBigrams++;
+                    }
+                }
+                if ((sharedBigrams * 100) / totalBigrams >= 70) {
+                    return 52;
+                }
+            }
+            return 0;
+        }
+
+        @JavascriptInterface
+        public String getInstalledApps() {
+            JSONArray array = new JSONArray();
+            try {
+                PackageManager pm = getPackageManager();
+                Intent mainIntent = new Intent(Intent.ACTION_MAIN);
+                mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+                List<ResolveInfo> resolved = pm.queryIntentActivities(mainIntent, 0);
+                if (resolved == null) return "[]";
+
+                Set<String> seenPackages = new HashSet<>();
+                String selfPkg = getPackageName();
+                List<String[]> items = new ArrayList<>();
+
+                for (ResolveInfo info : resolved) {
+                    if (info.activityInfo == null) continue;
+                    String pkg = info.activityInfo.packageName;
+                    if (pkg == null || pkg.isEmpty() || pkg.equals(selfPkg) || seenPackages.contains(pkg)) continue;
+                    seenPackages.add(pkg);
+                    CharSequence labelSeq = info.loadLabel(pm);
+                    String label = labelSeq != null ? labelSeq.toString().trim() : pkg;
+                    if (label.isEmpty()) label = pkg;
+                    items.add(new String[]{ label, pkg });
+                }
+
+                Collections.sort(items, (a, b) -> a[0].compareToIgnoreCase(b[0]));
+
+                for (String[] item : items) {
+                    JSONObject obj = new JSONObject();
+                    obj.put("name", item[0]);
+                    obj.put("packageName", item[1]);
+                    array.put(obj);
+                }
+            } catch (Exception ignored) {
+            }
+            return array.toString();
+        }
+
+        @JavascriptInterface
+        public boolean openApp(String packageName, String fallbackUrl) {
+            return openAppByName("", packageName, fallbackUrl);
+        }
+
+        @JavascriptInterface
+        public boolean openAppByName(String appQuery, String packageHintsCsv, String fallbackUrl) {
+            try {
+                PackageManager pm = getPackageManager();
+
+                // 1. Try explicit package hints first (supports comma-separated candidate packages)
+                if (packageHintsCsv != null && !packageHintsCsv.trim().isEmpty()) {
+                    String[] candidates = packageHintsCsv.split(",");
+                    for (String candidate : candidates) {
+                        String pkg = candidate != null ? candidate.trim() : "";
+                        if (!pkg.isEmpty() && launchPackageOrActivity(pm, pkg, null)) {
+                            return true;
+                        }
+                    }
+                }
+
+                String rawQuery = appQuery == null ? "" : appQuery.trim().toLowerCase(Locale.US);
+                String normQuery = normalizeAppToken(rawQuery);
+                String expandedQuery = expandAppAlias(normQuery);
+
+                // 2. Scan ALL installed launcher apps on device and launch best fuzzy match
+                if (!normQuery.isEmpty() || !expandedQuery.isEmpty()) {
+                    Intent mainIntent = new Intent(Intent.ACTION_MAIN);
+                    mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+                    List<ResolveInfo> resolved = pm.queryIntentActivities(mainIntent, 0);
+                    if (resolved != null) {
+                        int bestScore = 0;
+                        String bestPkg = null;
+                        String bestActivity = null;
+                        String selfPkg = getPackageName();
+
+                        for (ResolveInfo info : resolved) {
+                            if (info.activityInfo == null) continue;
+                            String pkg = info.activityInfo.packageName;
+                            if (pkg == null || pkg.isEmpty() || pkg.equals(selfPkg)) continue;
+
+                            CharSequence labelSeq = info.loadLabel(pm);
+                            String rawLabel = labelSeq != null ? labelSeq.toString().trim().toLowerCase(Locale.US) : "";
+                            String normLabel = normalizeAppToken(rawLabel);
+                            String pkgLower = pkg.toLowerCase(Locale.US);
+
+                            int score = scoreAppMatch(rawQuery, normQuery, expandedQuery, rawLabel, normLabel, pkgLower);
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestPkg = pkg;
+                                bestActivity = info.activityInfo.name;
+                            }
+                        }
+
+                        if (bestScore >= 52 && launchPackageOrActivity(pm, bestPkg, bestActivity)) {
+                            return true;
+                        }
+                    }
+                }
+
+                // 3. Android system app intent fallbacks (Dialer/Call, Calendar, Camera, Settings, Google, Truecaller, Free Fire)
+                String effective = expandedQuery.isEmpty() ? normQuery : expandedQuery;
+                if ("phone".equals(effective) || "dialer".equals(effective) || "call".equals(effective) || "contacts".equals(effective)) {
+                    String[] dialers = new String[]{
+                        "com.google.android.dialer",
+                        "com.android.dialer",
+                        "com.samsung.android.dialer",
+                        "com.android.contacts"
+                    };
+                    for (String pkg : dialers) {
+                        if (launchPackageOrActivity(pm, pkg, null)) return true;
+                    }
+                    Intent dialIntent = new Intent(Intent.ACTION_DIAL);
+                    dialIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(dialIntent);
+                    return true;
+                }
+
+                if ("calendar".equals(effective)) {
+                    String[] calendars = new String[]{
+                        "com.google.android.calendar",
+                        "com.android.calendar",
+                        "com.samsung.android.calendar"
+                    };
+                    for (String pkg : calendars) {
+                        if (launchPackageOrActivity(pm, pkg, null)) return true;
+                    }
+                    try {
+                        Intent calSelector = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALENDAR);
+                        calSelector.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(calSelector);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        Intent calView = new Intent(Intent.ACTION_VIEW, Uri.parse("content://com.android.calendar/time/"));
+                        calView.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(calView);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                }
+
+                if ("settings".equals(effective)) {
+                    Intent settingsIntent = new Intent(Settings.ACTION_SETTINGS);
+                    settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(settingsIntent);
+                    return true;
+                }
+
+                if ("google".equals(effective)) {
+                    String[] googlePkgs = new String[]{
+                        "com.google.android.googlequicksearchbox",
+                        "com.android.chrome"
+                    };
+                    for (String pkg : googlePkgs) {
+                        if (launchPackageOrActivity(pm, pkg, null)) return true;
+                    }
+                }
+
+                if ("truecaller".equals(effective)) {
+                    if (launchPackageOrActivity(pm, "com.truecaller", null)) return true;
+                }
+
+                if ("freefire".equals(effective)) {
+                    if (launchPackageOrActivity(pm, "com.dts.freefireth", null)) return true;
+                    if (launchPackageOrActivity(pm, "com.dts.freefiremax", null)) return true;
+                }
+
+                // 4. Web fallback if no native package exists
                 if (fallbackUrl != null && !fallbackUrl.isEmpty()) {
                     Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl));
                     browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -862,15 +1480,192 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public boolean searchInApp(String appId, String query, String fallbackUrl) {
+            try {
+                String cleanApp = appId == null ? "youtube" : appId.trim().toLowerCase(Locale.US);
+                String cleanQuery = query == null ? "" : query.trim();
+                if (cleanQuery.isEmpty()) return false;
+
+                if ("youtube".equals(cleanApp) || "yt".equals(cleanApp)) {
+                    try {
+                        Intent ytSearch = new Intent(Intent.ACTION_SEARCH);
+                        ytSearch.setPackage("com.google.android.youtube");
+                        ytSearch.putExtra(SearchManager.QUERY, cleanQuery);
+                        ytSearch.putExtra("query", cleanQuery);
+                        ytSearch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(ytSearch);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        Intent ytUrl = new Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(cleanQuery))
+                        );
+                        ytUrl.setPackage("com.google.android.youtube");
+                        ytUrl.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(ytUrl);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                } else if ("spotify".equals(cleanApp)) {
+                    try {
+                        Intent spSearch = new Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH);
+                        spSearch.setPackage("com.spotify.music");
+                        spSearch.putExtra(SearchManager.QUERY, cleanQuery);
+                        spSearch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(spSearch);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        Intent spUri = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + Uri.encode(cleanQuery)));
+                        spUri.setPackage("com.spotify.music");
+                        spUri.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(spUri);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                } else if ("maps".equals(cleanApp) || "googlemaps".equals(cleanApp)) {
+                    try {
+                        Intent mapIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(cleanQuery)));
+                        mapIntent.setPackage("com.google.android.apps.maps");
+                        mapIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(mapIntent);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                } else if ("playstore".equals(cleanApp)) {
+                    try {
+                        Intent marketIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=" + Uri.encode(cleanQuery)));
+                        marketIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(marketIntent);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                } else if ("google".equals(cleanApp)) {
+                    try {
+                        Intent gSearch = new Intent(Intent.ACTION_WEB_SEARCH);
+                        gSearch.putExtra(SearchManager.QUERY, cleanQuery);
+                        gSearch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(gSearch);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                }
+
+                if (fallbackUrl != null && !fallbackUrl.isEmpty()) {
+                    Intent webIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl));
+                    webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(webIntent);
+                    return true;
+                }
+            } catch (Exception ignored) {
+            }
+            return false;
+        }
+
+        private String lookupRealContactPhone(String contactQuery) {
+            if (contactQuery == null || contactQuery.trim().isEmpty()) return "";
+            if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                return "";
+            }
+            String q = contactQuery.trim().toLowerCase(Locale.ROOT);
+            boolean wantsMom = q.matches(".*\\\\b(mom|mommy|mama|mummy|mata|mataji|mother|maa|amma|ammi)\\\\b.*")
+                || q.contains("मॉम") || q.contains("मम्मी") || q.contains("माँ") || q.contains("मां");
+            boolean wantsDad = q.matches(".*\\\\b(dad|daddy|papa|pita|pitaji|father|pa|abba)\\\\b.*")
+                || q.contains("पापा") || q.contains("डैड") || q.contains("पिता");
+
+            Cursor cursor = null;
+            String bestPhone = "";
+            int bestScore = 0;
+            try {
+                cursor = getContentResolver().query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    new String[]{
+                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                        ContactsContract.CommonDataKinds.Phone.NUMBER
+                    },
+                    null,
+                    null,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+                );
+                if (cursor != null) {
+                    int nameIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME);
+                    int numIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
+                    while (cursor.moveToNext()) {
+                        String name = nameIdx >= 0 ? cursor.getString(nameIdx) : "";
+                        String num = numIdx >= 0 ? cursor.getString(numIdx) : "";
+                        if (name == null || num == null || name.trim().isEmpty() || num.trim().isEmpty()) continue;
+                        String nameLower = name.trim().toLowerCase(Locale.ROOT);
+                        int score = 0;
+                        if (nameLower.equals(q)) score = 100;
+                        else if (nameLower.startsWith(q)) score = 85;
+                        else if (nameLower.contains(q)) score = 75;
+                        else if (wantsMom && (nameLower.matches(".*\\\\b(mom|mommy|mama|mummy|mata|mataji|mother|maa|amma|ammi)\\\\b.*")
+                            || name.contains("मॉम") || name.contains("मम्मी") || name.contains("माँ"))) score = 90;
+                        else if (wantsDad && (nameLower.matches(".*\\\\b(dad|daddy|papa|pita|pitaji|father|abba)\\\\b.*")
+                            || name.contains("पापा") || name.contains("डैड"))) score = 90;
+
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestPhone = num.replaceAll("[^\\\\d+]", "");
+                            if (bestScore >= 100) break;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (cursor != null) cursor.close();
+            }
+            return bestPhone;
+        }
+
+        @JavascriptInterface
         public boolean makePhoneCall(String phoneNumber) {
+            String res = makeDirectCall(phoneNumber, "");
+            return res.startsWith("ok");
+        }
+
+        @JavascriptInterface
+        public String makeDirectCall(String phoneNumber, String contactName) {
             try {
                 String clean = phoneNumber == null ? "" : phoneNumber.replaceAll("[^\\\\d+]", "");
-                if (clean.isEmpty()) return false;
+                if (clean.isEmpty() && contactName != null && !contactName.trim().isEmpty()) {
+                    clean = lookupRealContactPhone(contactName);
+                }
+                if (clean.isEmpty()) return "no_number";
                 Uri uri = Uri.parse("tel:" + clean);
                 boolean canDirectCall = ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED;
-                Intent intent = new Intent(canDirectCall ? Intent.ACTION_CALL : Intent.ACTION_DIAL, uri);
+                if (!canDirectCall) {
+                    runOnUiThread(() -> ActivityCompat.requestPermissions(
+                        MainActivity.this,
+                        new String[]{Manifest.permission.CALL_PHONE, Manifest.permission.READ_CONTACTS},
+                        PERMISSION_REQUEST_CODE
+                    ));
+                    Intent dialIntent = new Intent(Intent.ACTION_DIAL, uri);
+                    dialIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(dialIntent);
+                    return "needs_call_permission";
+                }
+                Intent intent = new Intent(Intent.ACTION_CALL, uri);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(intent);
+                return "ok:direct_call";
+            } catch (Exception e) {
+                return "error:" + e.getMessage();
+            }
+        }
+
+        @JavascriptInterface
+        public boolean sendWhatsApp(String phoneNumber, String message) {
+            String res = sendWhatsAppDirect(phoneNumber, message, "");
+            return !res.startsWith("error");
+        }
+
+        private boolean isPackageInstalled(String pkgName) {
+            try {
+                getPackageManager().getPackageInfo(pkgName, 0);
                 return true;
             } catch (Exception ignored) {
                 return false;
@@ -878,16 +1673,340 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
-        public boolean sendWhatsApp(String phoneNumber, String message) {
+        public String sendWhatsAppDirect(String phoneNumber, String message, String contactName) {
             try {
                 String clean = phoneNumber == null ? "" : phoneNumber.replaceAll("[^0-9]", "");
-                String url = "https://wa.me/" + clean + "?text=" + Uri.encode(message == null ? "" : message);
+                if (clean.isEmpty() && contactName != null && !contactName.trim().isEmpty()) {
+                    String resolved = lookupRealContactPhone(contactName);
+                    clean = resolved.replaceAll("[^0-9]", "");
+                }
+                String safeMsg = message == null ? "" : message;
+                boolean a11yReady = JarvisAccessibilityService.isEnabled(MainActivity.this);
+                if (a11yReady) {
+                    JarvisAccessibilityService.armWhatsAppAutoSend(safeMsg);
+                }
+
+                String url = "https://wa.me/" + clean + "?text=" + Uri.encode(safeMsg);
                 Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                if (isPackageInstalled("com.whatsapp")) {
+                    intent.setPackage("com.whatsapp");
+                } else if (isPackageInstalled("com.whatsapp.w4b")) {
+                    intent.setPackage("com.whatsapp.w4b");
+                }
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(intent);
+                return a11yReady ? "sent_auto" : "opened_needs_accessibility";
+            } catch (Exception e) {
+                return "error:" + e.getMessage();
+            }
+        }
+
+        @JavascriptInterface
+        public String getDeviceTelemetry() {
+            JSONObject obj = new JSONObject();
+            try {
+                Date now = new Date();
+                SimpleDateFormat dateFmt = new SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.US);
+                SimpleDateFormat dayFmt = new SimpleDateFormat("EEEE", Locale.US);
+                SimpleDateFormat timeFmt = new SimpleDateFormat("hh:mm a", Locale.US);
+                obj.put("localDate", dateFmt.format(now));
+                obj.put("localDay", dayFmt.format(now));
+                obj.put("localTime", timeFmt.format(now));
+                obj.put("timezone", TimeZone.getDefault().getID());
+                obj.put("deviceModel", Build.MANUFACTURER + " " + Build.MODEL);
+                obj.put("androidVersion", Build.VERSION.RELEASE);
+
+                Intent batteryStatus = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+                if (batteryStatus != null) {
+                    int level = batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                    int scale = batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+                    int status = batteryStatus.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                    boolean isCharging =
+                        status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                        status == BatteryManager.BATTERY_STATUS_FULL;
+                    if (level >= 0 && scale > 0) {
+                        obj.put("batteryLevel", Math.round((level * 100f) / scale));
+                    }
+                    obj.put("isCharging", isCharging);
+                }
+
+                ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                if (am != null) {
+                    ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+                    am.getMemoryInfo(mi);
+                    long totalMb = mi.totalMem / (1024L * 1024L);
+                    long availMb = mi.availMem / (1024L * 1024L);
+                    obj.put("totalMemoryMb", totalMb);
+                    obj.put("availableMemoryMb", availMb);
+                    if (totalMb > 0) {
+                        obj.put("memoryUsagePercent", Math.round(((totalMb - availMb) * 100f) / totalMb));
+                    }
+                }
+
+                AudioManager amAudio = (AudioManager) getSystemService(AUDIO_SERVICE);
+                if (amAudio != null) {
+                    int rm = amAudio.getRingerMode();
+                    String ringerStr = rm == AudioManager.RINGER_MODE_SILENT
+                        ? "silent"
+                        : rm == AudioManager.RINGER_MODE_VIBRATE
+                        ? "vibrate"
+                        : "normal";
+                    obj.put("ringerMode", ringerStr);
+                    int maxVol = amAudio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                    int curVol = amAudio.getStreamVolume(AudioManager.STREAM_MUSIC);
+                    if (maxVol > 0) {
+                        obj.put("volumePercent", Math.round((curVol * 100f) / maxVol));
+                    }
+                }
+
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                if (wm != null) {
+                    obj.put("wifiEnabled", wm.isWifiEnabled());
+                }
+
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Network activeNet = cm.getActiveNetwork();
+                    NetworkCapabilities caps = activeNet != null ? cm.getNetworkCapabilities(activeNet) : null;
+                    boolean connected = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+                    String netType = "none";
+                    if (caps != null) {
+                        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) netType = "wifi";
+                        else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) netType = "cellular";
+                        else if (connected) netType = "other";
+                    }
+                    obj.put("networkConnected", connected);
+                    obj.put("networkType", netType);
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                    obj.put("hasDndAccess", nm != null && nm.isNotificationPolicyAccessGranted());
+                    obj.put("canWriteSettings", Settings.System.canWrite(MainActivity.this));
+                }
+            } catch (Exception ignored) {
+            }
+            return obj.toString();
+        }
+
+        @JavascriptInterface
+        public String setRingerMode(String mode) {
+            try {
+                AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+                if (am == null) return "error:no_audio_manager";
+                String m = mode == null ? "normal" : mode.trim().toLowerCase(Locale.US);
+                int targetMode = AudioManager.RINGER_MODE_NORMAL;
+                if ("vibrate".equals(m) || "vibration".equals(m)) {
+                    targetMode = AudioManager.RINGER_MODE_VIBRATE;
+                } else if ("silent".equals(m) || "mute".equals(m) || "dnd".equals(m)) {
+                    targetMode = AudioManager.RINGER_MODE_SILENT;
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                    boolean dndGranted = nm != null && nm.isNotificationPolicyAccessGranted();
+                    if (targetMode == AudioManager.RINGER_MODE_VIBRATE && !dndGranted) {
+                        try {
+                            am.setRingerMode(AudioManager.RINGER_MODE_VIBRATE);
+                            if (am.getRingerMode() == AudioManager.RINGER_MODE_VIBRATE) {
+                                return "ok:vibrate";
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    if (!dndGranted && (targetMode == AudioManager.RINGER_MODE_SILENT || targetMode == AudioManager.RINGER_MODE_VIBRATE || targetMode == AudioManager.RINGER_MODE_NORMAL)) {
+                        try {
+                            am.setRingerMode(targetMode);
+                            if (am.getRingerMode() == targetMode) {
+                                return "ok:" + m;
+                            }
+                        } catch (SecurityException se) {
+                            Intent dndIntent = new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS);
+                            dndIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(dndIntent);
+                            return "needs_dnd_permission";
+                        }
+                    }
+                }
+
+                am.setRingerMode(targetMode);
+                return "ok:" + m;
+            } catch (SecurityException se) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        Intent dndIntent = new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS);
+                        dndIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(dndIntent);
+                        return "needs_dnd_permission";
+                    } catch (Exception ignored) {
+                    }
+                }
+                return "needs_dnd_permission";
+            } catch (Exception e) {
+                return "error:" + e.getMessage();
+            }
+        }
+
+        @JavascriptInterface
+        public boolean setPhoneVolume(int percent) {
+            try {
+                AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+                if (am == null) return false;
+                int clamped = Math.max(0, Math.min(100, percent));
+                int maxMusic = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                int targetVol = Math.round((clamped * maxMusic) / 100f);
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, AudioManager.FLAG_SHOW_UI);
                 return true;
             } catch (Exception ignored) {
                 return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String setPhoneBrightness(int percent) {
+            final int clamped = Math.max(5, Math.min(100, percent));
+            runOnUiThread(() -> {
+                try {
+                    WindowManager.LayoutParams lp = getWindow().getAttributes();
+                    lp.screenBrightness = clamped / 100f;
+                    getWindow().setAttributes(lp);
+                } catch (Exception ignored) {
+                }
+            });
+            try {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.System.canWrite(MainActivity.this)) {
+                    int value255 = Math.max(10, Math.min(255, Math.round((clamped * 255f) / 100f)));
+                    Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL);
+                    Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, value255);
+                    return "ok";
+                }
+            } catch (Exception ignored) {
+            }
+            return "window_only";
+        }
+
+        private void launchSettingsIntentSafe(Intent primary, Intent fallback1, Intent fallback2) {
+            runOnUiThread(() -> {
+                PackageManager pm = getPackageManager();
+                Intent[] candidates = new Intent[]{ primary, fallback1, fallback2, new Intent(Settings.ACTION_SETTINGS) };
+                for (Intent candidate : candidates) {
+                    if (candidate == null) continue;
+                    try {
+                        if (candidate.resolveActivity(pm) != null) {
+                            candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(candidate);
+                            return;
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public String controlDeviceSetting(String settingType, String action) {
+            try {
+                String type = settingType == null ? "settings" : settingType.trim().toLowerCase(Locale.US);
+                String act = action == null ? "open" : action.trim().toLowerCase(Locale.US);
+
+                if ("flashlight".equals(type) || "torch".equals(type)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        CameraManager camMgr = (CameraManager) getSystemService(CAMERA_SERVICE);
+                        if (camMgr != null) {
+                            String[] ids = camMgr.getCameraIdList();
+                            if (ids.length > 0) {
+                                boolean enable = !"off".equals(act);
+                                camMgr.setTorchMode(ids[0], enable);
+                                return "ok:flashlight_" + (enable ? "on" : "off");
+                            }
+                        }
+                    }
+                    return "error:no_flashlight";
+                }
+
+                if ("wifi".equals(type)) {
+                    WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                    if (wm != null && ("on".equals(act) || "off".equals(act) || "toggle".equals(act))) {
+                        try {
+                            boolean enable = "toggle".equals(act) ? !wm.isWifiEnabled() : "on".equals(act);
+                            boolean switched = wm.setWifiEnabled(enable);
+                            if (switched) {
+                                return "ok:wifi_" + (enable ? "on" : "off");
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        launchSettingsIntentSafe(
+                            new Intent(Settings.Panel.ACTION_WIFI),
+                            new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY),
+                            new Intent(Settings.ACTION_WIFI_SETTINGS)
+                        );
+                        return "panel:wifi";
+                    }
+                    launchSettingsIntentSafe(new Intent(Settings.ACTION_WIFI_SETTINGS), null, null);
+                    return "panel:wifi";
+                }
+
+                if ("network".equals(type) || "mobile_data".equals(type) || "data".equals(type) || "internet".equals(type)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        launchSettingsIntentSafe(
+                            new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY),
+                            new Intent(Settings.ACTION_WIRELESS_SETTINGS),
+                            new Intent(Settings.ACTION_DATA_ROAMING_SETTINGS)
+                        );
+                        return "panel:network";
+                    }
+                    launchSettingsIntentSafe(
+                        new Intent(Settings.ACTION_WIRELESS_SETTINGS),
+                        new Intent(Settings.ACTION_DATA_ROAMING_SETTINGS),
+                        null
+                    );
+                    return "panel:network";
+                }
+
+                if ("bluetooth".equals(type)) {
+                    launchSettingsIntentSafe(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS), null, null);
+                    return "panel:bluetooth";
+                }
+
+                if ("airplane".equals(type)) {
+                    launchSettingsIntentSafe(new Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS), null, null);
+                    return "panel:airplane";
+                }
+
+                if ("location".equals(type) || "gps".equals(type)) {
+                    launchSettingsIntentSafe(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS), null, null);
+                    return "panel:location";
+                }
+
+                if ("battery".equals(type) || "battery_saver".equals(type) || "power_saving".equals(type)) {
+                    Intent batIntent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1
+                        ? new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
+                        : new Intent(Intent.ACTION_POWER_USAGE_SUMMARY);
+                    launchSettingsIntentSafe(batIntent, new Intent(Intent.ACTION_POWER_USAGE_SUMMARY), null);
+                    return "panel:battery";
+                }
+
+                if ("hotspot".equals(type)) {
+                    launchSettingsIntentSafe(new Intent(Settings.ACTION_WIRELESS_SETTINGS), null, null);
+                    return "panel:hotspot";
+                }
+
+                if ("sound".equals(type) || "dnd".equals(type)) {
+                    launchSettingsIntentSafe(new Intent(Settings.ACTION_SOUND_SETTINGS), null, null);
+                    return "panel:sound";
+                }
+
+                if ("display".equals(type) || "brightness".equals(type)) {
+                    launchSettingsIntentSafe(new Intent(Settings.ACTION_DISPLAY_SETTINGS), null, null);
+                    return "panel:display";
+                }
+
+                launchSettingsIntentSafe(new Intent(Settings.ACTION_SETTINGS), null, null);
+                return "panel:settings";
+            } catch (Exception e) {
+                return "error:" + e.getMessage();
             }
         }
 
@@ -995,13 +2114,31 @@ public class MainActivity extends BridgeActivity {
                     ignoringBattery = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
                 }
                 boolean hasMic = ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+                boolean hasCall = ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED;
+                boolean hasContacts = ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED;
+                boolean a11yEnabled = JarvisAccessibilityService.isEnabled(MainActivity.this);
                 obj.put("canDrawOverlays", canOverlay);
                 obj.put("ignoringBatteryOptimizations", ignoringBattery);
                 obj.put("hasMicPermission", hasMic);
+                obj.put("hasCallPermission", hasCall);
+                obj.put("hasContactsPermission", hasContacts);
+                obj.put("accessibilityEnabled", a11yEnabled);
                 obj.put("alwaysOnServiceRunning", JarvisBackgroundService.isServiceRunning);
             } catch (Exception ignored) {
             }
             return obj.toString();
+        }
+
+        @JavascriptInterface
+        public boolean requestAccessibilityPermission() {
+            try {
+                Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+                return true;
+            } catch (Exception ignored) {
+            }
+            return false;
         }
 
         @JavascriptInterface
