@@ -207,11 +207,12 @@ const a11yXml = [
   '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"',
   '    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"',
   '    android:accessibilityFeedbackType="feedbackGeneric"',
-  '    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"',
+  '    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"',
   '    android:canRetrieveWindowContent="true"',
+  '    android:canPerformGestures="true"',
   '    android:description="@string/jarvis_accessibility_desc"',
-  '    android:notificationTimeout="120"',
-  '    android:packageNames="com.whatsapp,com.whatsapp.w4b,com.instagram.android" />',
+  '    android:notificationTimeout="100"',
+  '    android:packageNames="com.whatsapp,com.whatsapp.w4b,com.instagram.android,com.spotify.music,com.android.systemui" />',
   '',
 ].join('\n');
 fs.writeFileSync(a11yXmlPath, a11yXml);
@@ -547,11 +548,13 @@ const commandHelperPath = path.join(javaDir, 'JarvisCommandHelper.java');
 const commandHelperCode = `package com.jarvis.assistant;
 
 import android.Manifest;
+import android.app.KeyguardManager;
 import android.app.NotificationManager;
 import android.app.SearchManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.Cursor;
@@ -563,6 +566,7 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.ContactsContract;
 import android.provider.MediaStore;
 import android.provider.Settings;
@@ -574,6 +578,74 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class JarvisCommandHelper {
+    public static boolean launchIntentSafely(Context ctx, Intent intent) {
+        if (ctx == null || intent == null) return false;
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (JarvisAccessibilityService.launchActivityFromService(intent)) {
+            return true;
+        }
+        try {
+            ctx.startActivity(intent);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    public static void wakeScreenBriefly(Context ctx, long ms) {
+        try {
+            PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isInteractive()) {
+                @SuppressWarnings("deprecation")
+                PowerManager.WakeLock wl = pm.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "Jarvis::WakeScreenLock"
+                );
+                wl.setReferenceCounted(false);
+                wl.acquire(Math.max(1500L, Math.min(8000L, ms)));
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static boolean saveDeviceLockPin(Context ctx, String pin) {
+        if (ctx == null || pin == null) return false;
+        String digits = pin.replaceAll("[^0-9]", "");
+        if (digits.length() < 4 || digits.length() > 12) return false;
+        ctx.getSharedPreferences("jarvis_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("deviceLockPin", digits)
+            .apply();
+        return true;
+    }
+
+    public static String getDeviceLockPin(Context ctx) {
+        if (ctx == null) return "";
+        return ctx.getSharedPreferences("jarvis_prefs", Context.MODE_PRIVATE).getString("deviceLockPin", "");
+    }
+
+    public static boolean hasDeviceLockPin(Context ctx) {
+        String p = getDeviceLockPin(ctx);
+        return p != null && p.length() >= 4;
+    }
+
+    public static String unlockPhoneScreen(Context ctx) {
+        String pin = getDeviceLockPin(ctx);
+        if (pin == null || pin.length() < 4) {
+            return "no_pin_set";
+        }
+        wakeScreenBriefly(ctx, 5000L);
+        KeyguardManager km = (KeyguardManager) ctx.getSystemService(Context.KEYGUARD_SERVICE);
+        if (km != null && !km.isKeyguardLocked()) {
+            return "already_unlocked";
+        }
+        if (!JarvisAccessibilityService.isEnabled(ctx)) {
+            return "needs_accessibility";
+        }
+        JarvisAccessibilityService.armPhoneUnlock(pin);
+        JarvisAccessibilityService.triggerImmediateUnlock();
+        return "ok:unlocking";
+    }
     public static int getBatteryPercent(Context ctx) {
         try {
             Intent batteryStatus = ctx.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
@@ -643,9 +715,9 @@ public class JarvisCommandHelper {
                 if (candidate == null) continue;
                 try {
                     if (candidate.resolveActivity(pm) != null) {
-                        candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        ctx.startActivity(candidate);
-                        return;
+                        if (launchIntentSafely(ctx, candidate)) {
+                            return;
+                        }
                     }
                 } catch (Exception ignored) {
                 }
@@ -819,17 +891,28 @@ public class JarvisCommandHelper {
         }
     }
 
+    public static String stripContactHonorifics(String name) {
+        if (name == null) return "";
+        return name.replaceAll("(?i)\\\\b(bhai|bhaiya|bhaiyya|bhaijaan|bro|ji|sir|madam|didi|yaar)\\\\b", " ")
+            .replaceAll("(भाई|भैया|जी|सर|मैडम|दीदी)", " ")
+            .replaceAll("\\\\s+", " ")
+            .trim();
+    }
+
     public static String lookupRealContactPhone(Context ctx, String contactQuery) {
         if (contactQuery == null || contactQuery.trim().isEmpty()) return "";
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             return "";
         }
-        String q = contactQuery.trim().toLowerCase(Locale.ROOT);
+        String qRaw = contactQuery.trim().toLowerCase(Locale.ROOT);
+        String qStripped = stripContactHonorifics(contactQuery).toLowerCase(Locale.ROOT);
+        String q = qStripped.isEmpty() ? qRaw : qStripped;
         String qCompact = q.replaceAll("[^a-z0-9\\\\u0900-\\\\u097F]", "");
-        boolean wantsMom = q.matches(".*\\\\b(mom|mommy|mama|mummy|mata|mataji|mother|maa|amma|ammi)\\\\b.*")
-            || q.contains("मॉम") || q.contains("मम्मी") || q.contains("माँ") || q.contains("मां");
-        boolean wantsDad = q.matches(".*\\\\b(dad|daddy|papa|pita|pitaji|father|pa|abba)\\\\b.*")
-            || q.contains("पापा") || q.contains("डैड") || q.contains("पिता");
+        String[] qTokens = q.split("\\\\s+");
+        boolean wantsMom = qRaw.matches(".*\\\\b(mom|mommy|mama|mummy|mata|mataji|mother|maa|amma|ammi)\\\\b.*")
+            || qRaw.contains("मॉम") || qRaw.contains("मम्मी") || qRaw.contains("माँ") || qRaw.contains("मां");
+        boolean wantsDad = qRaw.matches(".*\\\\b(dad|daddy|papa|pita|pitaji|father|pa|abba)\\\\b.*")
+            || qRaw.contains("पापा") || qRaw.contains("डैड") || qRaw.contains("पिता");
 
         Cursor cursor = null;
         String bestPhone = "";
@@ -853,24 +936,38 @@ public class JarvisCommandHelper {
                     String num = numIdx >= 0 ? cursor.getString(numIdx) : "";
                     if (name == null || num == null || name.trim().isEmpty() || num.trim().isEmpty()) continue;
                     String nameLower = name.trim().toLowerCase(Locale.ROOT);
+                    String nameStripped = stripContactHonorifics(name).toLowerCase(Locale.ROOT);
                     String nameCompact = nameLower.replaceAll("[^a-z0-9\\\\u0900-\\\\u097F]", "");
                     int score = 0;
-                    if (nameLower.equals(q) || (!qCompact.isEmpty() && nameCompact.equals(qCompact))) score = 100;
-                    else if (nameLower.startsWith(q) || (!qCompact.isEmpty() && nameCompact.startsWith(qCompact))) score = 88;
-                    else if (nameLower.contains(q) || (!qCompact.isEmpty() && nameCompact.contains(qCompact))) score = 78;
-                    else if (wantsMom && (nameLower.matches(".*\\\\b(mom|mommy|mama|mummy|mata|mataji|mother|maa|amma|ammi)\\\\b.*")
-                        || name.contains("मॉम") || name.contains("मम्मी") || name.contains("माँ"))) score = 92;
-                    else if (wantsDad && (nameLower.matches(".*\\\\b(dad|daddy|papa|pita|pitaji|father|abba)\\\\b.*")
-                        || name.contains("पापा") || name.contains("डैड"))) score = 92;
-                    else if (qCompact.length() >= 3 && nameCompact.length() >= 3) {
-                        int shared = 0;
-                        int total = Math.max(1, qCompact.length() - 1);
-                        for (int i = 0; i < qCompact.length() - 1; i++) {
-                            String bi = qCompact.substring(i, i + 2);
-                            if (nameCompact.contains(bi)) shared++;
+                    if (nameLower.equals(qRaw) || nameLower.equals(q) || (!nameStripped.isEmpty() && nameStripped.equals(q))
+                        || (!qCompact.isEmpty() && nameCompact.equals(qCompact))) {
+                        score = 100;
+                    } else if (nameLower.startsWith(q) || (!qCompact.isEmpty() && nameCompact.startsWith(qCompact))) {
+                        score = 88;
+                    } else if (nameLower.contains(q) || (!qCompact.isEmpty() && nameCompact.contains(qCompact))) {
+                        score = 80;
+                    } else if (wantsMom && (nameLower.matches(".*\\\\b(mom|mommy|mama|mummy|mata|mataji|mother|maa|amma|ammi)\\\\b.*")
+                        || name.contains("मॉम") || name.contains("मम्मी") || name.contains("माँ"))) {
+                        score = 92;
+                    } else if (wantsDad && (nameLower.matches(".*\\\\b(dad|daddy|papa|pita|pitaji|father|abba)\\\\b.*")
+                        || name.contains("पापा") || name.contains("डैड"))) {
+                        score = 92;
+                    } else {
+                        for (String tok : qTokens) {
+                            if (tok.length() >= 3 && (nameLower.startsWith(tok) || nameLower.contains(" " + tok) || nameLower.contains(tok))) {
+                                score = Math.max(score, nameLower.startsWith(tok) ? 84 : 74);
+                            }
                         }
-                        if ((shared * 100) / total >= 70) {
-                            score = 72;
+                        if (score == 0 && qCompact.length() >= 3 && nameCompact.length() >= 3) {
+                            int shared = 0;
+                            int total = Math.max(1, qCompact.length() - 1);
+                            for (int i = 0; i < qCompact.length() - 1; i++) {
+                                String bi = qCompact.substring(i, i + 2);
+                                if (nameCompact.contains(bi)) shared++;
+                            }
+                            if ((shared * 100) / total >= 70) {
+                                score = 72;
+                            }
                         }
                     }
 
@@ -895,11 +992,11 @@ public class JarvisCommandHelper {
                 clean = lookupRealContactPhone(ctx, contactName);
             }
             if (clean.isEmpty()) return "no_number";
+            wakeScreenBriefly(ctx, 3000L);
             Uri uri = Uri.parse("tel:" + clean);
             boolean canDirectCall = ContextCompat.checkSelfPermission(ctx, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED;
             Intent intent = new Intent(canDirectCall ? Intent.ACTION_CALL : Intent.ACTION_DIAL, uri);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(intent);
+            launchIntentSafely(ctx, intent);
             return canDirectCall ? "ok:direct_call" : "needs_call_permission";
         } catch (Exception e) {
             return "error:" + e.getMessage();
@@ -917,25 +1014,49 @@ public class JarvisCommandHelper {
 
     public static String sendWhatsAppDirect(Context ctx, String phoneNumber, String message, String contactName) {
         try {
+            wakeScreenBriefly(ctx, 4000L);
             String clean = phoneNumber == null ? "" : phoneNumber.replaceAll("[^0-9]", "");
             if (clean.isEmpty() && contactName != null && !contactName.trim().isEmpty()) {
                 String resolved = lookupRealContactPhone(ctx, contactName);
                 clean = resolved.replaceAll("[^0-9]", "");
             }
-            String safeMsg = message == null ? "" : message;
+            if (clean.length() == 10) {
+                clean = "91" + clean;
+            } else if (clean.length() == 11 && clean.startsWith("0")) {
+                clean = "91" + clean.substring(1);
+            }
+
+            String safeMsg = (message == null || message.trim().isEmpty()) ? "Hello!" : message.trim();
             boolean a11yReady = JarvisAccessibilityService.isEnabled(ctx);
+            String waPkg = isPackageInstalled(ctx, "com.whatsapp")
+                ? "com.whatsapp"
+                : isPackageInstalled(ctx, "com.whatsapp.w4b") ? "com.whatsapp.w4b" : null;
+
             if (a11yReady) {
                 JarvisAccessibilityService.armWhatsAppAutoSend(safeMsg, contactName != null ? contactName : "");
             }
-            String url = "https://wa.me/" + clean + "?text=" + Uri.encode(safeMsg);
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-            if (isPackageInstalled(ctx, "com.whatsapp")) {
-                intent.setPackage("com.whatsapp");
-            } else if (isPackageInstalled(ctx, "com.whatsapp.w4b")) {
-                intent.setPackage("com.whatsapp.w4b");
+
+            if (!clean.isEmpty()) {
+                String url = "https://wa.me/" + clean + "?text=" + Uri.encode(safeMsg);
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                if (waPkg != null) {
+                    intent.setPackage(waPkg);
+                }
+                launchIntentSafely(ctx, intent);
+            } else if (waPkg != null) {
+                // Contact phone not resolved locally: open WhatsApp Share picker with prefilled text so Accessibility picks the contact & clicks Send
+                Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                shareIntent.setType("text/plain");
+                shareIntent.putExtra(Intent.EXTRA_TEXT, safeMsg);
+                shareIntent.setPackage(waPkg);
+                if (!launchIntentSafely(ctx, shareIntent)) {
+                    Intent launchWa = ctx.getPackageManager().getLaunchIntentForPackage(waPkg);
+                    launchIntentSafely(ctx, launchWa);
+                }
+            } else {
+                Intent webIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/?text=" + Uri.encode(safeMsg)));
+                launchIntentSafely(ctx, webIntent);
             }
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(intent);
             return a11yReady ? "sent_auto" : "opened_needs_accessibility";
         } catch (Exception e) {
             return "error:" + e.getMessage();
@@ -944,6 +1065,7 @@ public class JarvisCommandHelper {
 
     public static String sendInstagramDirect(Context ctx, String recipientName, String message) {
         try {
+            wakeScreenBriefly(ctx, 4000L);
             String cleanRecipient = recipientName == null ? "" : recipientName.trim();
             String safeMsg = message == null ? "" : message.trim();
             boolean a11yReady = JarvisAccessibilityService.isEnabled(ctx);
@@ -954,12 +1076,11 @@ public class JarvisCommandHelper {
             Intent launch = pm.getLaunchIntentForPackage("com.instagram.android");
             if (launch != null) {
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                ctx.startActivity(launch);
+                launchIntentSafely(ctx, launch);
                 return a11yReady ? "armed_auto" : "opened_needs_accessibility";
             }
             Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.instagram.com/direct/inbox/"));
-            web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(web);
+            launchIntentSafely(ctx, web);
             return "opened_web";
         } catch (Exception e) {
             return "error:" + e.getMessage();
@@ -993,27 +1114,68 @@ public class JarvisCommandHelper {
                 return true;
             }
 
+            wakeScreenBriefly(ctx, 4000L);
+            boolean hasSpotify = isPackageInstalled(ctx, "com.spotify.music");
+
             if (!q.isEmpty()) {
-                String[] musicPkgs = new String[]{
-                    "com.spotify.music",
+                if (hasSpotify) {
+                    JarvisAccessibilityService.armSpotifyAutoPlay(q);
+                    try {
+                        Intent playIntent = new Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH);
+                        playIntent.setPackage("com.spotify.music");
+                        playIntent.putExtra(SearchManager.QUERY, q);
+                        playIntent.putExtra("android.intent.extra.user_query", q);
+                        playIntent.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*");
+                        if (launchIntentSafely(ctx, playIntent)) {
+                            return true;
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        Intent spSearch = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + Uri.encode(q)));
+                        spSearch.setPackage("com.spotify.music");
+                        if (launchIntentSafely(ctx, spSearch)) {
+                            return true;
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+                String[] fallbackPkgs = new String[]{
                     "com.google.android.apps.youtube.music",
                     "com.google.android.youtube"
                 };
-                for (String pkg : musicPkgs) {
+                for (String pkg : fallbackPkgs) {
                     if (isPackageInstalled(ctx, pkg)) {
                         try {
                             Intent playIntent = new Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH);
                             playIntent.setPackage(pkg);
                             playIntent.putExtra(SearchManager.QUERY, q);
                             playIntent.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*");
-                            playIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            ctx.startActivity(playIntent);
-                            return true;
+                            if (launchIntentSafely(ctx, playIntent)) {
+                                return true;
+                            }
                         } catch (Exception ignored) {
                         }
                     }
                 }
                 return searchInApp(ctx, "youtube", q + " song", "https://www.youtube.com/results?search_query=" + Uri.encode(q));
+            }
+
+            // Generic "play song" / "connect spotify and play song" (even on lock screen)
+            if (hasSpotify) {
+                JarvisAccessibilityService.armSpotifyAutoPlay("");
+                if (am != null) {
+                    sendMediaKey(am, KeyEvent.KEYCODE_MEDIA_PLAY);
+                }
+                PackageManager pm = ctx.getPackageManager();
+                Intent spotifyLaunch = pm.getLaunchIntentForPackage("com.spotify.music");
+                if (spotifyLaunch != null) {
+                    launchIntentSafely(ctx, spotifyLaunch);
+                    if (am != null) {
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> sendMediaKey(am, KeyEvent.KEYCODE_MEDIA_PLAY), 850L);
+                    }
+                    return true;
+                }
             }
 
             if (am != null) {
@@ -1023,8 +1185,8 @@ public class JarvisCommandHelper {
 
             PackageManager pm = ctx.getPackageManager();
             String[] players = new String[]{
-                "com.google.android.apps.youtube.music",
                 "com.spotify.music",
+                "com.google.android.apps.youtube.music",
                 "com.apple.android.music",
                 "com.jio.media.jiobeats",
                 "com.gaana",
@@ -1033,8 +1195,7 @@ public class JarvisCommandHelper {
             for (String pkg : players) {
                 Intent launch = pm.getLaunchIntentForPackage(pkg);
                 if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(launch);
+                    launchIntentSafely(ctx, launch);
                     if (am != null) {
                         new Handler(Looper.getMainLooper()).postDelayed(() -> sendMediaKey(am, KeyEvent.KEYCODE_MEDIA_PLAY), 900L);
                     }
@@ -1042,8 +1203,7 @@ public class JarvisCommandHelper {
                 }
             }
             Intent musicApp = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_MUSIC);
-            musicApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(musicApp);
+            launchIntentSafely(ctx, musicApp);
             if (am != null) {
                 new Handler(Looper.getMainLooper()).postDelayed(() -> sendMediaKey(am, KeyEvent.KEYCODE_MEDIA_PLAY), 900L);
             }
@@ -1065,9 +1225,7 @@ public class JarvisCommandHelper {
                     ytSearch.setPackage("com.google.android.youtube");
                     ytSearch.putExtra(SearchManager.QUERY, cleanQuery);
                     ytSearch.putExtra("query", cleanQuery);
-                    ytSearch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(ytSearch);
-                    return true;
+                    if (launchIntentSafely(ctx, ytSearch)) return true;
                 } catch (Exception ignored) {
                 }
                 try {
@@ -1076,45 +1234,37 @@ public class JarvisCommandHelper {
                         Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(cleanQuery))
                     );
                     ytUrl.setPackage("com.google.android.youtube");
-                    ytUrl.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(ytUrl);
-                    return true;
+                    if (launchIntentSafely(ctx, ytUrl)) return true;
                 } catch (Exception ignored) {
                 }
             } else if ("spotify".equals(cleanApp)) {
+                JarvisAccessibilityService.armSpotifyAutoPlay(cleanQuery);
                 try {
                     Intent spSearch = new Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH);
                     spSearch.setPackage("com.spotify.music");
                     spSearch.putExtra(SearchManager.QUERY, cleanQuery);
-                    spSearch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(spSearch);
-                    return true;
+                    if (launchIntentSafely(ctx, spSearch)) return true;
                 } catch (Exception ignored) {
                 }
             } else if ("maps".equals(cleanApp) || "googlemaps".equals(cleanApp)) {
                 try {
                     Intent mapIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(cleanQuery)));
                     mapIntent.setPackage("com.google.android.apps.maps");
-                    mapIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(mapIntent);
-                    return true;
+                    if (launchIntentSafely(ctx, mapIntent)) return true;
                 } catch (Exception ignored) {
                 }
             } else if ("google".equals(cleanApp)) {
                 try {
                     Intent gSearch = new Intent(Intent.ACTION_WEB_SEARCH);
                     gSearch.putExtra(SearchManager.QUERY, cleanQuery);
-                    gSearch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(gSearch);
-                    return true;
+                    if (launchIntentSafely(ctx, gSearch)) return true;
                 } catch (Exception ignored) {
                 }
             }
 
             if (fallbackUrl != null && !fallbackUrl.isEmpty()) {
                 Intent webIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl));
-                webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                ctx.startActivity(webIntent);
+                launchIntentSafely(ctx, webIntent);
                 return true;
             }
         } catch (Exception ignored) {
@@ -1130,9 +1280,7 @@ public class JarvisCommandHelper {
                     String pkg = c != null ? c.trim() : "";
                     if (!pkg.isEmpty()) {
                         Intent li = pm.getLaunchIntentForPackage(pkg);
-                        if (li != null) {
-                            li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            ctx.startActivity(li);
+                        if (li != null && launchIntentSafely(ctx, li)) {
                             return true;
                         }
                     }
@@ -1171,9 +1319,7 @@ public class JarvisCommandHelper {
                     }
                     if (bestScore >= 60 && bestPkg != null) {
                         Intent li = pm.getLaunchIntentForPackage(bestPkg);
-                        if (li != null) {
-                            li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            ctx.startActivity(li);
+                        if (li != null && launchIntentSafely(ctx, li)) {
                             return true;
                         }
                     }
@@ -1181,8 +1327,7 @@ public class JarvisCommandHelper {
             }
             if (fallbackUrl != null && !fallbackUrl.isEmpty()) {
                 Intent bi = new Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl));
-                bi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                ctx.startActivity(bi);
+                launchIntentSafely(ctx, bi);
                 return true;
             }
         } catch (Exception ignored) {
@@ -1221,25 +1366,30 @@ public class JarvisCommandHelper {
     }
 
     public static String extractSongQuery(String cmd) {
-        String s = cmd.replaceAll("(?i)\\\\b(play|resume|pause|stop|next|skip|previous|a|the|song|songs|music|track|gaana|gana|chalao|bajao)\\\\b", "")
-            .replaceAll("(प्ले\\\\s*सॉन्ग|गाना|चलाओ|बजाओ|सॉन्ग)", "")
+        String s = cmd.replaceAll("(?i)\\\\b(play|resume|pause|stop|next|skip|previous|connect|spotify|on|in|pe|par|se|karke|and|to|with|a|the|some|any|song|songs|music|track|gaana|gana|chalao|bajao|karo|please)\\\\b", " ")
+            .replaceAll("(प्ले\\\\s*सॉन्ग|गाना|चलाओ|बजाओ|सॉन्ग|स्पॉटिफाई|से|कनेक्ट|करके)", " ")
             .replaceAll("\\\\s+", " ")
             .trim();
         return s;
     }
 
     public static String extractPersonName(String cmd) {
+        String withoutBody = cmd.replaceAll("(?i)(?:\\\\b(?:that|saying|ki)\\\\b|कि|:).*$", "").trim();
+        Matcher mHindi = Pattern.compile(
+            "(?i)^([A-Za-z\\\\u0900-\\\\u097F][A-Za-z0-9_\\\\u0900-\\\\u097F ]{0,30}?)\\\\s+(?:ko|को)\\\\b"
+        ).matcher(withoutBody);
+        if (mHindi.find() && mHindi.group(1) != null) {
+            return mHindi.group(1).replaceAll("(?i)\\\\b(please|pls|now|abhi)\\\\b", "").trim();
+        }
         Matcher m = Pattern.compile(
-            "(?i)(?:call|dial|ring|message|whatsapp|send\\\\s+(?:a\\\\s+)?message\\\\s+to|msg|कॉल\\\\s*करो|फोन\\\\s*करो|मैसेज\\\\s*भेजो)\\\\s+(?:to\\\\s+)?([A-Za-z\\\\u0900-\\\\u097F][A-Za-z0-9_\\\\u0900-\\\\u097F ]{0,30}?)(?:\\\\s+(?:that|saying|ki|on|ko|को|directly)|$)"
-        ).matcher(cmd);
+            "(?i)(?:call|dial|ring|whatsapp|send\\\\s+(?:a\\\\s+)?(?:whatsapp\\\\s+)?message\\\\s+to|message\\\\s+to|msg\\\\s+to|text\\\\s+to|कॉल\\\\s*करो|फोन\\\\s*करो|मैसेज\\\\s*भेजो)\\\\s+(?:to\\\\s+)?([A-Za-z\\\\u0900-\\\\u097F][A-Za-z0-9_\\\\u0900-\\\\u097F ]{0,30}?)(?:\\\\s+(?:that|saying|ki|on|via|ko|को|directly)|$)"
+        ).matcher(withoutBody);
         if (m.find() && m.group(1) != null) {
             return m.group(1).replaceAll("(?i)\\\\b(ko|please|pls|now|abhi|directly)\\\\b", "").trim();
         }
-        Matcher mHindi = Pattern.compile(
-            "(?i)^([A-Za-z\\\\u0900-\\\\u097F][A-Za-z0-9_\\\\u0900-\\\\u097F ]{0,30}?)\\\\s+(?:ko|को)\\\\s+(?:call|dial|ring|whatsapp|message|msg|कॉल|फोन|मैसेज)"
-        ).matcher(cmd.trim());
-        if (mHindi.find() && mHindi.group(1) != null) {
-            return mHindi.group(1).replaceAll("(?i)\\\\b(please|pls|now|abhi)\\\\b", "").trim();
+        Matcher mTo = Pattern.compile("(?i)\\\\bto\\\\s+([A-Za-z\\\\u0900-\\\\u097F][A-Za-z0-9_\\\\u0900-\\\\u097F ]{0,30})$").matcher(withoutBody);
+        if (mTo.find() && mTo.group(1) != null) {
+            return mTo.group(1).trim();
         }
         return "";
     }
@@ -1284,6 +1434,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -1382,6 +1533,12 @@ public class JarvisBackgroundService extends Service {
         try {
             bgTts = new TextToSpeech(this, status -> {
                 if (status == TextToSpeech.SUCCESS) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        bgTts.setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build());
+                    }
                     int res = bgTts.setLanguage(Locale.forLanguageTag(recognitionLang != null ? recognitionLang : "en-US"));
                     if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
                         bgTts.setLanguage(Locale.US);
@@ -1401,7 +1558,7 @@ public class JarvisBackgroundService extends Service {
                                 bgCommandWindowUntil = System.currentTimeMillis() + 15000L;
                             }
                             if (shouldListenNow()) {
-                                scheduleRecognizerRestart(120);
+                                scheduleRecognizerRestart(50);
                             }
                         }
 
@@ -1410,7 +1567,7 @@ public class JarvisBackgroundService extends Service {
                             isTtsSpeaking = false;
                             releaseTempWakeLock();
                             if (shouldListenNow()) {
-                                scheduleRecognizerRestart(150);
+                                scheduleRecognizerRestart(60);
                             }
                         }
                     });
@@ -1441,14 +1598,14 @@ public class JarvisBackgroundService extends Service {
                 pauseRecognizerForTts();
                 Bundle params = new Bundle();
                 bgTts.speak(cleanText, TextToSpeech.QUEUE_FLUSH, params, "jarvis-bg-" + System.currentTimeMillis());
-                // Safety fallback scaled to speech length so longer knowledge answers never get cut off mid-sentence
-                long safetyMs = Math.max(2000L, Math.min(35000L, cleanText.length() * 135L));
+                // Safety fallback scaled to speech length so short acks resume mic immediately without stalling
+                long safetyMs = Math.max(850L, Math.min(32000L, cleanText.length() * 115L));
                 mainHandler.postDelayed(() -> {
                     if (isTtsSpeaking) {
                         isTtsSpeaking = false;
                         releaseTempWakeLock();
                         if (shouldListenNow()) {
-                            scheduleRecognizerRestart(120);
+                            scheduleRecognizerRestart(50);
                         }
                     }
                 }, safetyMs);
@@ -1499,7 +1656,7 @@ public class JarvisBackgroundService extends Service {
                 if (isActivityVisible && canListen != lastBroadcastListening) {
                     broadcastState(canListen);
                 }
-                long nextTickMs = isActivityVisible ? 1500L : 4000L;
+                long nextTickMs = isActivityVisible ? 1500L : 2000L;
                 mainHandler.postDelayed(this, nextTickMs);
             }
         }
@@ -1563,10 +1720,6 @@ public class JarvisBackgroundService extends Service {
                 if (mode == AudioManager.MODE_IN_CALL
                         || mode == AudioManager.MODE_IN_COMMUNICATION
                         || mode == AudioManager.MODE_RINGTONE) {
-                    return false;
-                }
-                boolean windowOpen = bgCommandWindowUntil > 0 && System.currentTimeMillis() < bgCommandWindowUntil;
-                if (am.isMusicActive() && !windowOpen) {
                     return false;
                 }
             }
@@ -1639,9 +1792,9 @@ public class JarvisBackgroundService extends Service {
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLang != null ? recognitionLang : "en-US");
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 550L);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 400L);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 450L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 380L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 280L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 300L);
 
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
             @Override
@@ -1700,7 +1853,7 @@ public class JarvisBackgroundService extends Service {
                     long delay;
                     if (isTimeoutOrNoMatch) {
                         consecutiveErrors = 0;
-                        delay = inActiveWindow ? 120L : 950L;
+                        delay = inActiveWindow ? 80L : 260L;
                     } else {
                         consecutiveErrors = Math.min(consecutiveErrors + 1, 5);
                         delay = Math.min(5000L, 1800L + (consecutiveErrors * 900L));
@@ -1727,7 +1880,7 @@ public class JarvisBackgroundService extends Service {
                 }
                 if (shouldListenNow()) {
                     long now = System.currentTimeMillis();
-                    long delay = (isActivityVisible || bgCommandWindowUntil > now) ? 100L : 950L;
+                    long delay = (isActivityVisible || bgCommandWindowUntil > now) ? 80L : 240L;
                     scheduleRecognizerRestart(delay);
                 }
             }
@@ -1785,12 +1938,13 @@ public class JarvisBackgroundService extends Service {
 
         // If user ONLY said "Hey Jarvis" / "Jarvis": immediately speak "Yes sir!" in background & keep 15s window open!
         if (cleanCmd.isEmpty() && hasWake) {
-            if (now - lastWakeLaunchMs > 1400L) {
+            if (now - lastWakeLaunchMs > 900L) {
                 lastWakeLaunchMs = now;
                 bgCommandWindowUntil = now + 15000L;
                 acquireTempWakeLock(8000L);
+                JarvisCommandHelper.wakeScreenBriefly(this, 2500L);
                 boolean isHindiPref = recognitionLang != null && recognitionLang.toLowerCase(Locale.ROOT).startsWith("hi");
-                speakInBackground(isHindiPref ? "जी सर!" : "Yes sir!", 1.24f);
+                speakInBackground(isHindiPref ? "जी सर!" : "Yes sir!", 1.32f);
             }
             return;
         }
@@ -1840,6 +1994,29 @@ public class JarvisBackgroundService extends Service {
         String lower = cmd.toLowerCase(Locale.ROOT).trim();
         boolean isHindi = (recognitionLang != null && recognitionLang.toLowerCase(Locale.ROOT).startsWith("hi"))
             || cmd.matches(".*[\\\\u0900-\\\\u097F].*");
+
+        // 0. Save Device Lock PIN or Unlock Phone by Voice
+        Matcher pinSetMatcher = Pattern.compile("(?:lock\\\\s*(?:code|pin)|phone\\\\s*(?:ka\\\\s+)?lock|mera\\\\s*lock).*?\\\\b(\\\\d{4,12})\\\\b|\\\\b(\\\\d{4,12})\\\\b.*?(?:lock\\\\s*(?:hai|rakh|set|save)|mera\\\\s*lock)").matcher(lower);
+        if (pinSetMatcher.find()) {
+            String pin = pinSetMatcher.group(1) != null ? pinSetMatcher.group(1) : pinSetMatcher.group(2);
+            if (pin != null && pin.length() >= 4) {
+                JarvisCommandHelper.saveDeviceLockPin(this, pin);
+                speakInBackground(isHindi ? "जी सर, मैंने आपका फोन लॉक पिन सुरक्षित सेव कर लिया है।" : "Yes sir, I have saved your phone lock PIN on this device for voice unlock.", 1.12f);
+                return;
+            }
+        }
+        if (lower.matches(".*\\\\b(?:unlock\\\\s+(?:the\\\\s+)?(?:phone|screen|device|mobile)|open\\\\s+(?:the\\\\s+)?(?:phone\\\\s+)?lock|lock\\\\s+khol(?:o|do|\\\\s+do)?)\\\\b.*")
+            || cmd.contains("लॉक खोल")) {
+            String unlockRes = JarvisCommandHelper.unlockPhoneScreen(this);
+            if ("no_pin_set".equals(unlockRes)) {
+                speakInBackground(isHindi ? "सर, कृपया पहले वॉइस सेटिंग्स में अपना लॉक पिन सेव करें।" : "Sir, please save your lock PIN in Voice Settings first.", 1.12f);
+            } else if ("needs_accessibility".equals(unlockRes)) {
+                speakInBackground(isHindi ? "सर, फोन अनलॉक करने के लिए जार्विस एक्सेसिबिलिटी सर्विस चालू करें।" : "Sir, please enable Jarvis Accessibility Service to unlock the screen automatically.", 1.12f);
+            } else {
+                speakInBackground(isHindi ? "जी सर, फोन अनलॉक कर रहा हूँ।" : "Yes sir, unlocking your phone.", 1.20f);
+            }
+            return;
+        }
 
         // 1. User explicitly asked for standby / background mode OR to open JARVIS UI
         if (lower.contains("standby") || lower.contains("stand by") || lower.contains("background mein") || lower.contains("go to background") || cmd.contains("स्टैंडबाय")) {
@@ -2018,15 +2195,20 @@ public class JarvisBackgroundService extends Service {
             return;
         }
 
-        // 6. Play Song / Music Control
-        if (lower.matches(".*\\\\b(?:play|resume|pause|stop|next|skip|previous)\\\\s+(?:[\\\\w'&-]+\\\\s+){0,5}?(?:song|songs|music|track|gaana|gana)\\\\b.*")
+        // 6. Play Song / Spotify Direct Auto-Play / Music Control (works over lock screen)
+        boolean explicitSpotifyPlay = (lower.contains("spotify") || cmd.contains("स्पॉटिफाई"))
+            && (lower.contains("play") || lower.contains("connect") || lower.contains("song") || lower.contains("music") || lower.contains("gaana") || lower.contains("chalao") || lower.contains("bajao"))
+            && !lower.contains("search") && !lower.contains("find");
+        if (explicitSpotifyPlay
+            || lower.matches(".*\\\\b(?:play|resume|pause|stop|next|skip|previous)\\\\s+(?:[\\\\w'&-]+\\\\s+){0,5}?(?:song|songs|music|track|gaana|gana)\\\\b.*")
+            || lower.matches(".*\\\\bplay\\\\s+[\\\\w'&-]+\\\\s+(?:on|in)\\\\s+spotify\\\\b.*")
             || lower.matches(".*\\\\b(?:song|music|gaana)\\\\s+(?:play|chalao|bajao)\\\\b.*")
             || cmd.matches(".*(?:प्ले\\\\s*सॉन्ग|गाना\\\\s*चलाओ|गाना\\\\s*बजाओ).*")) {
             String action = (lower.contains("pause") || lower.contains("stop")) ? "pause"
                 : (lower.contains("next") || lower.contains("skip")) ? "next"
                 : lower.contains("previous") ? "previous" : "play";
             String songQuery = JarvisCommandHelper.extractSongQuery(cmd);
-            speakInBackground("play".equals(action) ? (songQuery.isEmpty() ? "Yes sir, playing music." : "Yes sir, playing " + songQuery + ".") : "Yes sir.", 1.08f);
+            speakInBackground("play".equals(action) ? (songQuery.isEmpty() ? "Yes sir, connecting to Spotify and playing music." : "Yes sir, playing " + songQuery + " on Spotify.") : "Yes sir.", 1.15f);
             JarvisCommandHelper.playMusicOrMedia(this, action, songQuery);
             return;
         }
@@ -2118,7 +2300,7 @@ public class JarvisBackgroundService extends Service {
                 Intent.FLAG_ACTIVITY_CLEAR_TOP
             );
             launch.putExtra(EXTRA_WAKE_COMMAND, fullCommand);
-            startActivity(launch);
+            JarvisCommandHelper.launchIntentSafely(this, launch);
         } catch (Exception ignored) {
         }
     }
@@ -2248,12 +2430,18 @@ const accessibilityPath = path.join(javaDir, 'JarvisAccessibilityService.java');
 const accessibilityCode = `package com.jarvis.assistant;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
+import android.app.KeyguardManager;
 import android.content.Context;
+import android.content.Intent;
+import android.graphics.Path;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.DisplayMetrics;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import java.util.List;
@@ -2261,6 +2449,8 @@ import java.util.Locale;
 
 public class JarvisAccessibilityService extends AccessibilityService {
     public static volatile boolean isServiceConnected = false;
+    public static volatile JarvisAccessibilityService instance = null;
+
     private static volatile boolean pendingWhatsAppSend = false;
     private static volatile long pendingDeadlineMs = 0L;
     private static volatile String pendingMessageText = "";
@@ -2274,7 +2464,30 @@ public class JarvisAccessibilityService extends AccessibilityService {
     private static volatile int igStage = 0;
     private static volatile long lastIgActionMs = 0L;
 
+    private static volatile boolean pendingSpotifyAutoPlay = false;
+    private static volatile String pendingSpotifyQuery = "";
+    private static volatile long pendingSpotifyDeadlineMs = 0L;
+    private static volatile long lastSpotifyActionMs = 0L;
+
+    private static volatile boolean pendingPhoneUnlock = false;
+    private static volatile String pendingUnlockPin = "";
+    private static volatile long pendingUnlockDeadlineMs = 0L;
+    private static volatile long lastUnlockActionMs = 0L;
+    private static volatile boolean unlockDigitsTyped = false;
+
     private final Handler handler = new Handler(Looper.getMainLooper());
+
+    public static boolean launchActivityFromService(Intent intent) {
+        JarvisAccessibilityService svc = instance;
+        if (svc == null || intent == null) return false;
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            svc.startActivity(intent);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
 
     public static void armWhatsAppAutoSend(String message) {
         armWhatsAppAutoSend(message, "");
@@ -2283,7 +2496,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     public static void armWhatsAppAutoSend(String message, String contactName) {
         pendingMessageText = message != null ? message.trim() : "";
         pendingContactName = contactName != null ? contactName.trim() : "";
-        pendingDeadlineMs = System.currentTimeMillis() + 20000L;
+        pendingDeadlineMs = System.currentTimeMillis() + 25000L;
         pendingWhatsAppSend = true;
     }
 
@@ -2293,6 +2506,25 @@ public class JarvisAccessibilityService extends AccessibilityService {
         pendingIgDeadlineMs = System.currentTimeMillis() + 30000L;
         igStage = 0;
         pendingInstagramSend = !pendingIgRecipient.isEmpty();
+    }
+
+    public static void armSpotifyAutoPlay(String query) {
+        pendingSpotifyQuery = query != null ? query.trim() : "";
+        pendingSpotifyDeadlineMs = System.currentTimeMillis() + 14000L;
+        pendingSpotifyAutoPlay = true;
+    }
+
+    public static void armPhoneUnlock(String pin) {
+        if (pin == null || pin.trim().isEmpty()) return;
+        pendingUnlockPin = pin.trim();
+        pendingUnlockDeadlineMs = System.currentTimeMillis() + 18000L;
+        unlockDigitsTyped = false;
+        lastUnlockActionMs = 0L;
+        pendingPhoneUnlock = true;
+        JarvisAccessibilityService svc = instance;
+        if (svc != null) {
+            svc.handler.postDelayed(svc::tryUnlockKeyguard, 320L);
+        }
     }
 
     public static boolean isEnabled(Context ctx) {
@@ -2312,6 +2544,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         isServiceConnected = true;
+        instance = this;
     }
 
     @Override
@@ -2320,6 +2553,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         isServiceConnected = false;
+        instance = null;
         super.onDestroy();
     }
 
@@ -2328,6 +2562,30 @@ public class JarvisAccessibilityService extends AccessibilityService {
         if (event == null || event.getPackageName() == null) return;
         String pkg = event.getPackageName().toString();
         long now = System.currentTimeMillis();
+
+        if (pendingPhoneUnlock && (pkg.contains("systemui") || pkg.contains("keyguard") || pkg.contains("lockscreen"))) {
+            if (now > pendingUnlockDeadlineMs) {
+                pendingPhoneUnlock = false;
+                pendingUnlockPin = "";
+                return;
+            }
+            tryUnlockKeyguard();
+            return;
+        }
+
+        if (pendingSpotifyAutoPlay && "com.spotify.music".equals(pkg)) {
+            if (now > pendingSpotifyDeadlineMs) {
+                pendingSpotifyAutoPlay = false;
+                return;
+            }
+            tryAutoPlaySpotify();
+            handler.postDelayed(() -> {
+                if (pendingSpotifyAutoPlay && System.currentTimeMillis() <= pendingSpotifyDeadlineMs) {
+                    tryAutoPlaySpotify();
+                }
+            }, 700L);
+            return;
+        }
 
         if (pendingWhatsAppSend && ("com.whatsapp".equals(pkg) || "com.whatsapp.w4b".equals(pkg))) {
             if (now > pendingDeadlineMs) {
@@ -2551,56 +2809,235 @@ public class JarvisAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    private void tryAutoPlaySpotify() {
+        if (!pendingSpotifyAutoPlay) return;
+        long now = System.currentTimeMillis();
+        if (now - lastSpotifyActionMs < 850L) return;
+
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null && am.isMusicActive()) {
+                pendingSpotifyAutoPlay = false;
+                return;
+            }
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root == null) return;
+
+            AccessibilityNodeInfo playBtn = findClickableByTextOrDescContains(root, "play");
+            if (playBtn != null) {
+                lastSpotifyActionMs = now;
+                pendingSpotifyAutoPlay = false;
+                playBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                return;
+            }
+            if (!pendingSpotifyQuery.isEmpty()) {
+                AccessibilityNodeInfo row = findMatchingRecipientRow(root, pendingSpotifyQuery);
+                if (row != null) {
+                    lastSpotifyActionMs = now;
+                    pendingSpotifyAutoPlay = false;
+                    row.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void tryUnlockKeyguard() {
+        if (!pendingPhoneUnlock || pendingUnlockPin.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (now > pendingUnlockDeadlineMs) {
+            pendingPhoneUnlock = false;
+            pendingUnlockPin = "";
+            return;
+        }
+        try {
+            KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+            if (km != null && !km.isKeyguardLocked()) {
+                pendingPhoneUnlock = false;
+                pendingUnlockPin = "";
+                return;
+            }
+            if (now - lastUnlockActionMs < 650L) return;
+
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                AccessibilityNodeInfo firstKey = findPinDigitNode(root, String.valueOf(pendingUnlockPin.charAt(0)));
+                if (firstKey != null) {
+                    if (unlockDigitsTyped) return;
+                    unlockDigitsTyped = true;
+                    lastUnlockActionMs = now;
+                    final String pinCopy = pendingUnlockPin;
+                    for (int i = 0; i < pinCopy.length(); i++) {
+                        final String digit = String.valueOf(pinCopy.charAt(i));
+                        handler.postDelayed(() -> {
+                            AccessibilityNodeInfo r = getRootInActiveWindow();
+                            if (r == null) return;
+                            AccessibilityNodeInfo keyNode = findPinDigitNode(r, digit);
+                            if (keyNode != null) {
+                                keyNode.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                            }
+                        }, i * 110L);
+                    }
+                    handler.postDelayed(() -> {
+                        AccessibilityNodeInfo r = getRootInActiveWindow();
+                        if (r != null) {
+                            AccessibilityNodeInfo enterBtn = findPinEnterNode(r);
+                            if (enterBtn != null) {
+                                enterBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                            }
+                        }
+                    }, pinCopy.length() * 110L + 160L);
+                    handler.postDelayed(() -> {
+                        KeyguardManager kmCheck = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+                        if (kmCheck == null || !kmCheck.isKeyguardLocked()) {
+                            pendingPhoneUnlock = false;
+                            pendingUnlockPin = "";
+                        } else {
+                            unlockDigitsTyped = false;
+                        }
+                    }, pinCopy.length() * 110L + 950L);
+                    return;
+                }
+            }
+
+            // Swipe up on lock screen cover to reveal keypad
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                lastUnlockActionMs = now;
+                DisplayMetrics dm = getResources().getDisplayMetrics();
+                float cx = dm.widthPixels * 0.5f;
+                float startY = dm.heightPixels * 0.82f;
+                float endY = dm.heightPixels * 0.22f;
+                Path swipePath = new Path();
+                swipePath.moveTo(cx, startY);
+                swipePath.lineTo(cx, endY);
+                GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(swipePath, 0L, 260L);
+                dispatchGesture(new GestureDescription.Builder().addStroke(stroke).build(), null, null);
+                handler.postDelayed(this::tryUnlockKeyguard, 550L);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private AccessibilityNodeInfo findPinDigitNode(AccessibilityNodeInfo root, String digit) {
+        if (root == null || digit == null) return null;
+        AccessibilityNodeInfo byId = findClickableById(root, "com.android.systemui:id/key" + digit);
+        if (byId != null) return byId;
+        return findDigitButtonRecursive(root, digit);
+    }
+
+    private AccessibilityNodeInfo findDigitButtonRecursive(AccessibilityNodeInfo node, String digit) {
+        if (node == null) return null;
+        if (node.isVisibleToUser() && node.isEnabled()) {
+            String t = node.getText() != null ? node.getText().toString().trim() : "";
+            String d = node.getContentDescription() != null ? node.getContentDescription().toString().trim() : "";
+            boolean matchText = t.equals(digit) || t.startsWith(digit + "\\n") || t.startsWith(digit + " ");
+            boolean matchDesc = d.equals(digit) || d.equalsIgnoreCase("key " + digit);
+            if (matchText || matchDesc) {
+                AccessibilityNodeInfo cur = node;
+                while (cur != null) {
+                    if (cur.isClickable() && cur.isEnabled()) return cur;
+                    cur = cur.getParent();
+                }
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo hit = findDigitButtonRecursive(node.getChild(i), digit);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo findPinEnterNode(AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo byId = findClickableById(root, "com.android.systemui:id/key_enter");
+        if (byId != null) return byId;
+        AccessibilityNodeInfo ok = findClickableByTextOrDesc(root, "ok", "enter");
+        if (ok != null) return ok;
+        return findClickableByTextOrDescContains(root, "done");
+    }
+
     private void tryClickWhatsAppSend(String pkg) {
         if (!pendingWhatsAppSend) return;
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return;
 
         try {
-            boolean hasTextInEntry = hasNonEmptyEntry(root, pkg + ":id/entry")
-                || hasNonEmptyEntry(root, "com.whatsapp:id/entry")
-                || hasNonEmptyEntry(root, "com.whatsapp.w4b:id/entry");
-            if (!hasTextInEntry) {
-                if (!pendingContactName.isEmpty()) {
-                    AccessibilityNodeInfo pickerRow = findMatchingRecipientRow(root, pendingContactName);
-                    if (pickerRow != null) {
-                        long now = System.currentTimeMillis();
-                        if (now - lastClickMs >= 900L) {
-                            lastClickMs = now;
-                            pendingContactName = "";
-                            pickerRow.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                        }
-                    }
+            AccessibilityNodeInfo entry = findEditableById(root, pkg + ":id/entry");
+            if (entry == null) entry = findEditableById(root, "com.whatsapp:id/entry");
+            if (entry == null) entry = findEditableById(root, "com.whatsapp.w4b:id/entry");
+
+            if (entry != null) {
+                String currentText = entry.getText() != null ? entry.getText().toString().trim() : "";
+                if (!pendingMessageText.isEmpty() && (currentText.isEmpty() || !currentText.contains(pendingMessageText))) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastClickMs < 450L) return;
+                    lastClickMs = now;
+                    Bundle args = new Bundle();
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pendingMessageText);
+                    entry.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                    entry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    return;
+                }
+
+                AccessibilityNodeInfo sendBtn = findClickableById(root, pkg + ":id/send");
+                if (sendBtn == null) sendBtn = findClickableById(root, "com.whatsapp:id/send");
+                if (sendBtn == null) sendBtn = findClickableById(root, "com.whatsapp.w4b:id/send");
+                if (sendBtn == null) sendBtn = findClickableByContentDesc(root);
+
+                if (sendBtn != null && !currentText.isEmpty()) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastClickMs < 1100L) return;
+                    lastClickMs = now;
+                    pendingWhatsAppSend = false;
+                    pendingContactName = "";
+                    sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 }
                 return;
             }
 
-            AccessibilityNodeInfo sendBtn = findClickableById(root, pkg + ":id/send");
-            if (sendBtn == null) sendBtn = findClickableById(root, "com.whatsapp:id/send");
-            if (sendBtn == null) sendBtn = findClickableById(root, "com.whatsapp.w4b:id/send");
-            if (sendBtn == null) sendBtn = findClickableByContentDesc(root);
-
-            if (sendBtn != null) {
+            // Contact Picker or Chats list: find contact row, or search by stripped name!
+            if (!pendingContactName.isEmpty()) {
                 long now = System.currentTimeMillis();
-                if (now - lastClickMs < 1500L) return;
-                lastClickMs = now;
-                pendingWhatsAppSend = false;
-                pendingContactName = "";
-                sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                if (now - lastClickMs < 650L) return;
+                String strippedName = JarvisCommandHelper.stripContactHonorifics(pendingContactName);
+                AccessibilityNodeInfo pickerRow = findMatchingRecipientRow(root, pendingContactName);
+                if (pickerRow == null && !strippedName.isEmpty() && !strippedName.equalsIgnoreCase(pendingContactName)) {
+                    pickerRow = findMatchingRecipientRow(root, strippedName);
+                }
+                if (pickerRow != null) {
+                    lastClickMs = now;
+                    pendingContactName = "";
+                    pickerRow.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    return;
+                }
+
+                String searchTarget = !strippedName.isEmpty() ? strippedName : pendingContactName;
+                AccessibilityNodeInfo searchBox = findEditableById(root, pkg + ":id/search_src_text");
+                if (searchBox == null) searchBox = findEditableById(root, "com.whatsapp:id/search_src_text");
+                if (searchBox == null) searchBox = findEditableById(root, "com.whatsapp.w4b:id/search_src_text");
+                if (searchBox == null) searchBox = findEditableByHint(root, "search");
+                if (searchBox != null) {
+                    String q = searchBox.getText() != null ? searchBox.getText().toString().trim() : "";
+                    if (!q.toLowerCase(Locale.ROOT).contains(searchTarget.toLowerCase(Locale.ROOT))) {
+                        lastClickMs = now;
+                        Bundle args = new Bundle();
+                        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, searchTarget);
+                        searchBox.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                        searchBox.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    }
+                    return;
+                }
+
+                AccessibilityNodeInfo searchIcon = findClickableById(root, pkg + ":id/menuitem_search");
+                if (searchIcon == null) searchIcon = findClickableById(root, "com.whatsapp:id/menuitem_search");
+                if (searchIcon == null) searchIcon = findClickableById(root, "com.whatsapp.w4b:id/menuitem_search");
+                if (searchIcon == null) searchIcon = findClickableByTextOrDescContains(root, "search");
+                if (searchIcon != null) {
+                    lastClickMs = now;
+                    searchIcon.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                }
             }
         } catch (Exception ignored) {
         }
-    }
-
-    private boolean hasNonEmptyEntry(AccessibilityNodeInfo root, String viewId) {
-        List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(viewId);
-        if (nodes == null || nodes.isEmpty()) return false;
-        for (AccessibilityNodeInfo node : nodes) {
-            if (node != null && node.getText() != null && !node.getText().toString().trim().isEmpty()) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private AccessibilityNodeInfo findClickableById(AccessibilityNodeInfo root, String viewId) {
@@ -3581,6 +4018,7 @@ public class MainActivity extends BridgeActivity {
                 obj.put("hasDndAccess", hasDndAccess);
                 obj.put("canWriteSettings", canWriteSettings);
                 obj.put("accessibilityEnabled", a11yEnabled);
+                obj.put("hasDeviceLockPin", JarvisCommandHelper.hasDeviceLockPin(MainActivity.this));
                 obj.put("alwaysOnServiceRunning", JarvisBackgroundService.isServiceRunning);
             } catch (Exception ignored) {
             }
@@ -3811,6 +4249,21 @@ public class MainActivity extends BridgeActivity {
                 }
             }
             return false;
+        }
+
+        @JavascriptInterface
+        public boolean saveDeviceLockPin(String pin) {
+            return JarvisCommandHelper.saveDeviceLockPin(MainActivity.this, pin);
+        }
+
+        @JavascriptInterface
+        public boolean hasDeviceLockPin() {
+            return JarvisCommandHelper.hasDeviceLockPin(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public String unlockPhoneScreen() {
+            return JarvisCommandHelper.unlockPhoneScreen(MainActivity.this);
         }
     }
 }

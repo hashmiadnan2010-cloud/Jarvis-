@@ -244,7 +244,7 @@ export class JarvisSpeechEngine {
         return;
       }
 
-      // Ultra-fast interim wake reaction: ack "Yes sir!" in 140ms if standalone wake, or 360ms for inline command
+      // Ultra-fast interim wake reaction: ack "Yes sir!" in 80ms if standalone wake, or 280ms for inline command
       const stripped = this.stripWakePrefix(interimTranscript);
       clearTimeout(this.interimCommitTimer);
       clearTimeout(this.wakeAckTimer);
@@ -253,13 +253,13 @@ export class JarvisSpeechEngine {
           if (!this.isSpeaking) {
             this.emitCommandDeduped(interimTranscript, true);
           }
-        }, 140);
+        }, 80);
       } else {
         this.interimCommitTimer = setTimeout(() => {
           if (!this.isSpeaking) {
             this.emitCommandDeduped(interimTranscript, true);
           }
-        }, 360);
+        }, 280);
       }
     } else if (this.isCommandWindowOpen()) {
       if (interimTranscript && !finalTranscript) {
@@ -270,7 +270,7 @@ export class JarvisSpeechEngine {
             if (!this.isSpeaking && this.isCommandWindowOpen()) {
               this.emitCommandDeduped(interimTranscript, false);
             }
-          }, 420);
+          }, 320);
         }
         return;
       }
@@ -598,7 +598,7 @@ export class JarvisSpeechEngine {
                 window.JarvisAndroid?.startNativeListening?.();
               }
             }
-          }, Math.max(2000, Math.min(35000, text.length * 135)));
+          }, Math.max(850, Math.min(35000, text.length * 120)));
           return;
         }
       } catch {
@@ -692,7 +692,7 @@ export class JarvisSpeechEngine {
       finishSpeaking();
     };
 
-    this.speechFallbackTimer = setTimeout(finishSpeaking, Math.max(2000, Math.min(35000, text.length * 135)));
+    this.speechFallbackTimer = setTimeout(finishSpeaking, Math.max(900, Math.min(35000, text.length * 120)));
     window.speechSynthesis.speak(utterance);
   }
 

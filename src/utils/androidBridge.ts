@@ -29,6 +29,9 @@ interface JarvisAndroidInterface {
   requestWriteSettingsPermission?: () => boolean;
   requestCorePermissions?: () => boolean;
   moveToBackgroundStandby?: () => boolean;
+  saveDeviceLockPin?: (pin: string) => boolean;
+  hasDeviceLockPin?: () => boolean;
+  unlockPhoneScreen?: () => string;
   openDefaultAssistantSettings?: () => boolean;
   setTtsSpeakingState?: (speaking: boolean) => void;
   consumePendingWakeCommand?: () => string;
@@ -254,6 +257,7 @@ export interface AndroidBackgroundStatus {
   hasContactsPermission: boolean;
   hasDndAccess: boolean;
   canWriteSettings: boolean;
+  hasDeviceLockPin: boolean;
 }
 
 let wakeLockSentinel: WakeLockSentinel | null = null;
@@ -274,6 +278,7 @@ export function getAndroidBackgroundStatus(): AndroidBackgroundStatus {
     hasContactsPermission: false,
     hasDndAccess: false,
     canWriteSettings: false,
+    hasDeviceLockPin: false,
   };
   if (typeof window === 'undefined' || !window.JarvisAndroid?.getBackgroundStatus) {
     return fallback;
@@ -292,6 +297,7 @@ export function getAndroidBackgroundStatus(): AndroidBackgroundStatus {
       hasContactsPermission: Boolean(parsed.hasContactsPermission),
       hasDndAccess: Boolean(parsed.hasDndAccess),
       canWriteSettings: Boolean(parsed.canWriteSettings),
+      hasDeviceLockPin: Boolean(parsed.hasDeviceLockPin),
     };
   } catch {
     return fallback;
@@ -389,6 +395,25 @@ export function moveToBackgroundStandby(): boolean {
     return window.JarvisAndroid.moveToBackgroundStandby();
   } catch {
     return false;
+  }
+}
+
+export function saveDeviceLockPin(pin: string): boolean {
+  const cleanPin = String(pin || '').replace(/[^0-9]/g, '');
+  if (typeof window === 'undefined' || !window.JarvisAndroid?.saveDeviceLockPin) return false;
+  try {
+    return window.JarvisAndroid.saveDeviceLockPin(cleanPin);
+  } catch {
+    return false;
+  }
+}
+
+export function unlockDeviceScreen(): string {
+  if (typeof window === 'undefined' || !window.JarvisAndroid?.unlockPhoneScreen) return 'web_simulated';
+  try {
+    return String(window.JarvisAndroid.unlockPhoneScreen() || 'error');
+  } catch {
+    return 'error';
   }
 }
 
@@ -667,6 +692,7 @@ export async function toggleBackgroundKeepAlive(enabled: boolean): Promise<boole
     } catch (e) {
       console.warn('Native setBackgroundMode failed:', e);
     }
+    return active || enabled;
   }
 
   if (typeof navigator !== 'undefined' && 'wakeLock' in navigator) {

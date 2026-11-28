@@ -1,11 +1,16 @@
 export type IntentType =
   | 'WHATSAPP_SEND'
+  | 'INSTAGRAM_SEND'
   | 'CALL_CONTACT'
   | 'SET_LANGUAGE'
   | 'DEVICE_SETTING'
   | 'SYSTEM_VOLUME'
   | 'SYSTEM_BRIGHTNESS'
   | 'LAUNCH_APP'
+  | 'PLAY_MUSIC'
+  | 'STANDBY_BACKGROUND'
+  | 'UNLOCK_PHONE'
+  | 'SET_LOCK_PIN'
   | 'SYSTEM_TERMINAL'
   | 'MEDIA_CONTROL'
   | 'CREATE_NOTE'
@@ -98,6 +103,7 @@ export interface CommandLog {
     settingType?: string;
     settingAction?: string;
     ringerMode?: 'normal' | 'vibrate' | 'silent';
+    pinCode?: string;
   };
   quickFollowUps?: string[];
 }

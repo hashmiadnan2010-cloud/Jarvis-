@@ -58,12 +58,14 @@ import {
   openAnyPhoneApp,
   openExternalWebOrApp,
   refreshWebBatteryTelemetry,
+  saveDeviceLockPin,
   searchInsidePhoneApp,
   setDeviceHardwareBrightness,
   setDeviceHardwareVolume,
   setPhoneRingerMode,
   syncAssistantNativeConfig,
   toggleBackgroundKeepAlive,
+  unlockDeviceScreen,
 } from './utils/androidBridge';
 import { resolveLiveKnowledgeAnswer } from './utils/knowledgeEngine';
 
@@ -979,9 +981,9 @@ export default function App() {
           // Execute clear phone/device/clock/language actions instantaneously (0ms network wait)
           data = localCandidate;
         } else {
-          // On native Android APK, use short 2s server probe + instant live Wikipedia/DuckDuckGo fallback so answers never hang at "Processing..."
+          // On native Android APK, use crisp 1.4s server probe + instant live Wikipedia/DuckDuckGo fallback
           const candidateBases = getJarvisApiBaseUrls();
-          const fetchTimeoutMs = isAndroidNativeApp() ? 2200 : 7000;
+          const fetchTimeoutMs = isAndroidNativeApp() ? 1400 : 7000;
           for (const apiBase of candidateBases) {
             const controller = new AbortController();
             const timeoutId = window.setTimeout(() => controller.abort(), fetchTimeoutMs);
@@ -1157,11 +1159,16 @@ export default function App() {
           quickFollowUps,
           status: 'completed',
         };
-        setCommandLogs((prev) => [newLog, ...prev]);
+        setCommandLogs((prev) => [newLog, ...prev].slice(0, 40));
 
-        // Resolve matching contact helper (prefers real device contacts)
+        // Resolve matching contact helper (prefers real device contacts, strips honorifics like bhai/ji/bro)
         const resolveContact = (targetStr: string) => {
           const t = String(targetStr || '').toLowerCase().trim();
+          const strippedT = t
+            .replace(/\b(?:bhai|bhaiya|bro|ji|sir|madam|didi|bhaijaan|yaar)\b/gi, ' ')
+            .replace(/भाई|भैया|जी|सर|मैडम|दीदी/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
           const isMom = /\b(mom|mommy|mummy|maa|mother|mata|mataji|amma)\b|मॉम|मम्मी|माँ|मां/.test(t);
           const isDad = /\b(dad|daddy|papa|father|pita|pitaji)\b|पापा|डैड|पिता/.test(t);
           const ordered = [
@@ -1176,6 +1183,7 @@ export default function App() {
                 rel === t ||
                 name === t ||
                 (t.length >= 2 && (name.includes(t) || rel.includes(t))) ||
+                (strippedT.length >= 2 && (name.includes(strippedT) || strippedT.split(' ').some((tok) => tok.length >= 3 && name.includes(tok)))) ||
                 (isMom && (rel === 'mother' || /\b(mom|mommy|mummy|maa|mother)\b|मॉम|मम्मी|माँ/.test(name) || /\b(mom|mummy|maa|mother)\b/.test(rel))) ||
                 (isDad && (rel === 'father' || /\b(dad|daddy|papa|father)\b|पापा|डैड/.test(name) || /\b(dad|papa|father)\b/.test(rel)))
               );
@@ -1285,6 +1293,25 @@ export default function App() {
             setDeviceHardwareBrightness(br);
             setSystemState((s) => ({ ...s, brightness: br }));
           }
+        } else if (intent === 'SET_LOCK_PIN') {
+          const rawPin = String(actionPayload.pinCode || '').replace(/\D/g, '');
+          if (rawPin.length >= 4) {
+            saveDeviceLockPin(rawPin);
+            setHudStatus('Device Lock PIN Saved On Phone');
+          }
+        } else if (intent === 'UNLOCK_PHONE') {
+          const unlockRes = unlockDeviceScreen();
+          if (unlockRes === 'no_pin_set') {
+            const msgNoPin =
+              activeLang === 'Hindi'
+                ? 'सर, कृपया पहले Settings में जाकर अपना फोन लॉक पिन सेव करें।'
+                : 'Sir, please save your phone lock PIN in Voice Settings first so I can unlock your screen.';
+            setLatestEnglishAction('Lock PIN not set yet. Open Voice & Automation Settings to save PIN.');
+            setLatestHindiVoice(msgNoPin);
+            speakHindiVoice(msgNoPin);
+          } else {
+            setHudStatus('Phone Unlock Triggered');
+          }
         } else if (intent === 'STANDBY_BACKGROUND') {
           setHudStatus('Cool Standby Mode Active // Listening in Background');
           window.setTimeout(() => {
@@ -1314,7 +1341,7 @@ export default function App() {
               status: 'success',
             },
             ...prev,
-          ]);
+          ].slice(0, 50));
         }
       } catch (err) {
         console.error('Command processing error:', err);
@@ -1631,14 +1658,9 @@ export default function App() {
   }, [systemState.batteryLevel, speakHindiVoice, voiceSettings.language]);
 
   return (
-    <div
-      className="min-h-screen bg-[#030712] text-slate-100 bg-hud-grid relative flex flex-col transition-all duration-300"
-      style={{
-        filter: `brightness(${systemState.brightness}%)`,
-      }}
-    >
+    <div className="min-h-screen bg-[#030712] text-slate-100 bg-hud-grid relative flex flex-col">
       {/* Sci-Fi Top Navigation Bar */}
-      <header className="border-b border-cyan-900/60 bg-black/80 backdrop-blur-md sticky top-0 z-40 px-4 py-3 flex items-center justify-between">
+      <header className="border-b border-cyan-900/60 bg-black/95 sticky top-0 z-40 px-4 py-3 flex items-center justify-between">
         {/* Left: Branding & Core status */}
         <div className="flex items-center gap-3">
           <div className="relative">

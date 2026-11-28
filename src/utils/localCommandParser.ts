@@ -41,7 +41,17 @@ export function isDirectClockQuery(command: string): boolean {
 export function isHighConfidenceFastAction(command: string, parsedLocal: { intent?: string; actionPayload?: { searchQuery?: string } }): boolean {
   const lower = command.toLowerCase().trim();
   const intent = parsedLocal?.intent || 'GENERAL_CONVERSATION';
-  if (intent === 'SET_LANGUAGE' || intent === 'DEVICE_SETTING' || intent === 'PLAY_MUSIC' || intent === 'INSTAGRAM_SEND' || intent === 'STANDBY_BACKGROUND') return true;
+  if (
+    intent === 'SET_LANGUAGE' ||
+    intent === 'DEVICE_SETTING' ||
+    intent === 'PLAY_MUSIC' ||
+    intent === 'INSTAGRAM_SEND' ||
+    intent === 'STANDBY_BACKGROUND' ||
+    intent === 'UNLOCK_PHONE' ||
+    intent === 'SET_LOCK_PIN'
+  ) {
+    return true;
+  }
   if (intent === 'LAUNCH_APP') {
     return /\b(open|launch|start|kholo|chalu|play)\b|खोलो|चलाओ|चालू/i.test(lower);
   }
@@ -202,6 +212,23 @@ function matchContactClient(lower: string, contacts: Contact[] = [], rawCommand:
     }
   }
 
+  // Strip common honorifics (e.g. "Zaid bhai" -> "Zaid") and check token overlap
+  const strippedLower = lower
+    .replace(/\b(?:bhai|bhaiya|bro|ji|sir|madam|didi|bhaijaan|yaar)\b/gi, ' ')
+    .replace(/भाई|भैया|जी|सर|मैडम|दीदी/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  for (const c of orderedContacts) {
+    const cTokens = String(c.name || '').toLowerCase().split(/\s+/).filter((t) => t.length >= 3);
+    if (cTokens.some((tok) => strippedLower.includes(tok))) {
+      return {
+        targetContact: c.name,
+        shortName: c.name,
+        phone: String(c.phone || ''),
+      };
+    }
+  }
+
   if (isMotherAlias) return { targetContact: 'Mom', shortName: 'Mom', phone: '' };
   if (isFatherAlias) return { targetContact: 'Dad', shortName: 'Dad', phone: '' };
   if (lower.includes('boss') || probe.includes('बॉस')) return { targetContact: 'Boss', shortName: 'Boss', phone: '+14155550199' };
@@ -252,8 +279,9 @@ function extractAppSearchClient(command: string): { appId: string; appLabel: str
   const hasPlayStore = /\b(play\s*store)\b/i.test(lower) || /प्ले\s*स्टोर/.test(trimmed);
 
   const hasSearchOrPlayCue =
-    /\b(search|find|look\s*up|watch|play|sarch)\b/i.test(lower) ||
-    /सर्च|खोजो|ढूंढो|चलाओ|दिखाओ|बजाओ/.test(trimmed);
+    /\b(search|find|look\s*up|watch|sarch)\b/i.test(lower) ||
+    (!hasSpotify && /\bplay\b/i.test(lower)) ||
+    /सर्च|खोजो|ढूंढो|दिखाओ/.test(trimmed);
 
   if (!hasSearchOrPlayCue && !(hasYouTube && /\b(video|song|channel|shorts|vlog)\b/i.test(lower))) {
     return null;
@@ -497,7 +525,14 @@ function extractMusicCommandClient(command: string): { mediaAction: 'play' | 'pa
   if (/\b(previous|prev|last)\s+(?:the\s+)?(?:song|music|track|gaana|gana)\b|पिछला\s*गाना/i.test(command)) {
     return { mediaAction: 'previous', songQuery: '' };
   }
+
+  const hasSpotifyPlay =
+    (/\bspotify\b|स्पॉटिफाई/i.test(command) &&
+      (/\b(play|connect|song|songs|music|gaana|gana|chalao|bajao)\b|चलाओ|बजाओ|सॉन्ग|गाना/i.test(command))) &&
+    !/\b(search|find)\b|सर्च/i.test(command);
+
   const hasPlaySong =
+    hasSpotifyPlay ||
     /\b(play|resume|start|bajao|chalao)\s+(?:(?:a|the|some|this|my)\s+)?(?:[\w\u0900-\u097F'&-]+\s+){0,5}?(?:song|songs|music|track|gaana|gana)\b/i.test(lower) ||
     /\b(?:song|music|gaana|gana)\s+(?:play|chalao|bajao)\b/i.test(lower) ||
     /(?:प्ले\s*सॉन्ग|सॉन्ग\s*प्ले|गाना\s*चलाओ|गाना\s*बजाओ|म्यूजिक\s*चलाओ|सॉन्ग\s*बजाओ)/.test(command);
@@ -506,12 +541,32 @@ function extractMusicCommandClient(command: string): { mediaAction: 'play' | 'pa
 
   const songQuery = command
     .replace(/^(?:hey|hay|hi|ok|please|हे)[,\s]+(?:jarvis|जार्विस)[,\s:-]*/i, '')
-    .replace(/\b(?:play|resume|start|a|the|some|song|songs|music|track|gaana|gana|bajao|chalao|karo|please)\b/gi, ' ')
-    .replace(/प्ले|सॉन्ग|गाना|म्यूजिक|चलाओ|बजाओ|करो/g, ' ')
+    .replace(/\b(?:play|resume|start|connect|spotify|on|in|pe|par|se|karke|kar\s*ke|and|to|with|a|the|some|any|song|songs|music|track|gaana|gana|bajao|chalao|karo|kar\s*do|please)\b/gi, ' ')
+    .replace(/प्ले|सॉन्ग|गाना|म्यूजिक|चलाओ|बजाओ|करो|कर\s*दो|स्पॉटिफाई|से|कनेक्ट|करके|पर|में/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
   return { mediaAction: 'play', songQuery };
+}
+
+function extractLockPinSetupClient(command: string): string | null {
+  const lower = command.toLowerCase().trim();
+  const hasLockCue =
+    /\b(lock\s*pin|pin\s*lock|screen\s*lock|phone\s*lock|unlock\s*pin|password|passcode)\b/i.test(lower) ||
+    (/\block\b/.test(lower) && /\b(set|save|remember|hai|is)\b/.test(lower)) ||
+    /फोन\s*का\s*लॉक|लॉक\s*पिन/.test(command);
+  if (!hasLockCue) return null;
+  const digits = command.match(/\b(\d{4,12})\b/);
+  return digits ? digits[1] : null;
+}
+
+function isUnlockPhoneCommandClient(command: string): boolean {
+  const lower = command.toLowerCase().trim();
+  if (/\b(setting|settings|battery|wifi|whatsapp|instagram|spotify)\b/.test(lower)) return false;
+  return (
+    /\b(unlock\s+(?:the\s+|my\s+)?(?:phone|screen|device)|open\s+(?:the\s+|my\s+)?(?:phone\s+)?lock|lock\s+khol\s*(?:do|de|na)?|phone\s+ka\s+lock\s+khol\s*(?:do|de)?|lock\s+open\s+kar\s*(?:do|o)?)\b/i.test(lower) ||
+    /लॉक\s*खोल\s*(?:दो|दे|ना)?|फोन\s*अनलॉक/.test(command)
+  );
 }
 
 export function parseCommandLocallyClient(
@@ -632,9 +687,18 @@ export function parseCommandLocallyClient(
     lower.includes('sandesh') ||
     /मैसेज|संदेश|भेजो|भेज\s*दो/.test(command);
 
-  let mediaAction: 'play' | 'pause' | 'next' | 'previous' | undefined;
+  const lockPinToSave = extractLockPinSetupClient(command);
+  const wantsPhoneUnlock = isUnlockPhoneCommandClient(command);
 
-  if (isStandbyRequest) {
+  let mediaAction: 'play' | 'pause' | 'next' | 'previous' | undefined;
+  let pinCode: string | undefined;
+
+  if (lockPinToSave) {
+    intent = 'SET_LOCK_PIN';
+    pinCode = lockPinToSave;
+  } else if (wantsPhoneUnlock) {
+    intent = 'UNLOCK_PHONE';
+  } else if (isStandbyRequest) {
     intent = 'STANDBY_BACKGROUND';
   } else if (matchedSetting) {
     intent = 'DEVICE_SETTING';
@@ -725,7 +789,15 @@ export function parseCommandLocallyClient(
   let hindiVoiceReply = '';
   let englishActionSummary = '';
 
-  if (intent === 'STANDBY_BACKGROUND') {
+  if (intent === 'SET_LOCK_PIN') {
+    englishActionSummary = 'Yes sir, your device lock PIN has been saved securely on this phone for voice unlock.';
+    hindiVoiceReply = isHindiMode
+      ? 'जी सर, आपका लॉक पिन इस फोन पर सुरक्षित रूप से सेव हो गया है।'
+      : englishActionSummary;
+  } else if (intent === 'UNLOCK_PHONE') {
+    englishActionSummary = 'Yes sir, unlocking your phone screen now.';
+    hindiVoiceReply = isHindiMode ? 'जी सर, फोन का लॉक खोल रहा हूँ।' : englishActionSummary;
+  } else if (intent === 'STANDBY_BACKGROUND') {
     englishActionSummary = 'Yes sir, moving to cool background standby. Say "Hey Jarvis" whenever you need me.';
     hindiVoiceReply = isHindiMode
       ? 'जी सर, मैं बैकग्राउंड स्टैंडबाय मोड में जा रहा हूँ। जब भी ज़रूरत हो, "हे जार्विस" बोलें।'
@@ -970,6 +1042,7 @@ export function parseCommandLocallyClient(
       settingType: settingType || undefined,
       settingAction: settingAction || undefined,
       ringerMode,
+      pinCode,
     },
     quickFollowUps: ['Call Mom', 'Search on YouTube', 'Turn on Wi-Fi'],
   };

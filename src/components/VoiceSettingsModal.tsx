@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Volume2, Mic, Sparkles, Check, X, Play, Radio, ShieldCheck, Smartphone, BatteryCharging, Layers } from 'lucide-react';
+import { Settings, Volume2, Mic, Sparkles, Check, X, Play, Radio, ShieldCheck, Smartphone, BatteryCharging, Layers, Lock } from 'lucide-react';
 import { PersonalityMode, VoiceSettings } from '../types/jarvis';
 import { JarvisSpeechEngine, VoiceOption } from '../utils/speech';
 import { jarvisAudio } from '../utils/audioFx';
@@ -13,6 +13,7 @@ import {
   requestOverlayDisplayPermission,
   requestUnrestrictedBatteryPermission,
   requestWriteSystemSettingsPermission,
+  saveDeviceLockPin,
 } from '../utils/androidBridge';
 
 interface VoiceSettingsModalProps {
@@ -59,6 +60,8 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
   const [selectedVoiceName, setSelectedVoiceName] = useState(settings.preferredHindiVoiceName || '');
   const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>([]);
   const [bgStatus, setBgStatus] = useState<AndroidBackgroundStatus>(() => getAndroidBackgroundStatus());
+  const [lockPinInput, setLockPinInput] = useState('');
+  const [pinSavedMsg, setPinSavedMsg] = useState('');
 
   useEffect(() => {
     if (isOpen) {
@@ -532,6 +535,61 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
                   Set JARVIS as default Digital Assistant in Android Settings
                 </div>
               </button>
+            </div>
+
+            {/* On-Device Phone Lock PIN for Voice Unlock */}
+            <div className="p-3 rounded-lg border border-cyan-500/30 bg-black/50 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold font-mono text-cyan-300 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-cyan-400" />
+                  PHONE LOCK PIN (VOICE UNLOCK)
+                </span>
+                <span
+                  className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                    bgStatus.hasDeviceLockPin
+                      ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-slate-900 text-amber-300 border border-amber-500/40'
+                  }`}
+                >
+                  {bgStatus.hasDeviceLockPin ? 'SAVED ON DEVICE' : 'NOT SET'}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-tight">
+                Stored strictly inside your phone's local storage. Say "Hey Jarvis unlock phone" or "lock khol do" to swipe &amp; enter PIN automatically (requires Direct Auto-Send Accessibility).
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={12}
+                  value={lockPinInput}
+                  onChange={(e) => {
+                    setLockPinInput(e.target.value.replace(/\D/g, ''));
+                    setPinSavedMsg('');
+                  }}
+                  placeholder="Enter phone PIN (e.g. 4-8 digits)"
+                  className="flex-1 bg-slate-900 border border-cyan-900 text-xs text-cyan-200 px-3 py-1.5 rounded-lg font-mono focus:outline-none focus:border-cyan-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cleaned = lockPinInput.replace(/\D/g, '');
+                    if (cleaned.length < 4) {
+                      setPinSavedMsg('Enter at least 4 digits');
+                      return;
+                    }
+                    saveDeviceLockPin(cleaned);
+                    setLockPinInput('');
+                    setBgStatus(getAndroidBackgroundStatus());
+                    setPinSavedMsg('PIN saved locally!');
+                    jarvisAudio.playTaskSuccess();
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-mono font-bold transition-colors cursor-pointer"
+                >
+                  SAVE PIN
+                </button>
+              </div>
+              {pinSavedMsg && <div className="text-[10px] font-mono text-emerald-300">{pinSavedMsg}</div>}
             </div>
           </div>
 

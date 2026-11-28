@@ -29,17 +29,38 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Audio wave visualization on canvas
+  // Audio wave visualization on canvas (throttled to ~24fps, cached gradients, paused when hidden)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const amberGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    amberGrad.addColorStop(0, '#f59e0b');
+    amberGrad.addColorStop(0.5, '#fbbf24');
+    amberGrad.addColorStop(1, '#f59e0b');
+
+    const speakingGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    speakingGrad.addColorStop(0, '#38bdf8');
+    speakingGrad.addColorStop(0.5, '#00f0ff');
+    speakingGrad.addColorStop(1, '#0284c7');
+
+    const idleGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    idleGrad.addColorStop(0, '#0284c7');
+    idleGrad.addColorStop(0.5, '#00f0ff');
+    idleGrad.addColorStop(1, 'rgba(0, 240, 255, 0.25)');
+
     let animationFrameId: number;
     let phase = 0;
+    let lastDrawMs = 0;
 
-    const render = () => {
+    const render = (now: number) => {
+      animationFrameId = requestAnimationFrame(render);
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (now - lastDrawMs < 42) return;
+      lastDrawMs = now;
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const width = canvas.width;
@@ -54,8 +75,9 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
       ctx.lineTo(width, centerY);
       ctx.stroke();
 
-      const bars = 48;
+      const bars = 36;
       const barWidth = width / bars;
+      ctx.fillStyle = wakeWordDetected || isProcessing ? amberGrad : isSpeaking ? speakingGrad : idleGrad;
 
       for (let i = 0; i < bars; i++) {
         const x = i * barWidth;
@@ -64,40 +86,21 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
 
         let amplitude = isListening ? 6 * bellCurve + 3 : 3;
         if (isSpeaking) {
-          amplitude = (Math.sin(phase * 4 + i * 0.4) * 0.5 + 0.5) * 45 * bellCurve + 8;
+          amplitude = (Math.sin(phase * 4 + i * 0.4) * 0.5 + 0.5) * 40 * bellCurve + 8;
         } else if (wakeWordDetected) {
-          amplitude = (Math.sin(phase * 2.4 + i * 0.3) * 0.5 + 0.5) * 28 * bellCurve + 8;
+          amplitude = (Math.sin(phase * 2.4 + i * 0.3) * 0.5 + 0.5) * 26 * bellCurve + 8;
         } else if (isProcessing) {
-          amplitude = (Math.sin(phase * 6 + i * 0.6) * 0.5 + 0.5) * 35 * bellCurve + 8;
+          amplitude = (Math.sin(phase * 6 + i * 0.6) * 0.5 + 0.5) * 32 * bellCurve + 8;
         }
 
         const barHeight = Math.max(3, amplitude);
-
-        // Color gradient based on state
-        const grad = ctx.createLinearGradient(0, centerY - barHeight, 0, centerY + barHeight);
-        if (wakeWordDetected || isProcessing) {
-          grad.addColorStop(0, '#f59e0b');
-          grad.addColorStop(0.5, '#fbbf24');
-          grad.addColorStop(1, '#f59e0b');
-        } else if (isSpeaking) {
-          grad.addColorStop(0, '#38bdf8');
-          grad.addColorStop(0.5, '#00f0ff');
-          grad.addColorStop(1, '#0284c7');
-        } else {
-          grad.addColorStop(0, '#0284c7');
-          grad.addColorStop(0.5, '#00f0ff');
-          grad.addColorStop(1, 'rgba(0, 240, 255, 0.2)');
-        }
-
-        ctx.fillStyle = grad;
         ctx.fillRect(x + 2, centerY - barHeight / 2, barWidth - 4, barHeight);
       }
 
-      phase += 0.04;
-      animationFrameId = requestAnimationFrame(render);
+      phase += 0.08;
     };
 
-    render();
+    animationFrameId = requestAnimationFrame(render);
 
     return () => {
       cancelAnimationFrame(animationFrameId);
@@ -105,7 +108,7 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
   }, [isListening, isSpeaking, isProcessing, wakeWordDetected]);
 
   return (
-    <div className="relative flex flex-col items-center justify-center p-6 border border-cyan-500/20 bg-gradient-to-b from-cyan-950/20 via-black/60 to-black/90 rounded-2xl backdrop-blur-md shadow-[0_0_50px_rgba(0,240,255,0.08)] overflow-hidden">
+    <div className="relative flex flex-col items-center justify-center p-6 border border-cyan-500/20 bg-gradient-to-b from-cyan-950/25 via-black/80 to-black/95 rounded-2xl shadow-[0_0_32px_rgba(0,240,255,0.08)] overflow-hidden">
       {/* Corner Sci-Fi Tech Accents */}
       <div className="absolute top-3 left-3 w-4 h-4 border-t-2 border-l-2 border-cyan-400" />
       <div className="absolute top-3 right-3 w-4 h-4 border-t-2 border-r-2 border-cyan-400" />
@@ -115,12 +118,12 @@ export const ArcReactorHUD: React.FC<ArcReactorHUDProps> = ({
       {/* Top telemetry ticker */}
       <div className="w-full flex items-center justify-between text-[11px] font-mono text-cyan-400/70 border-b border-cyan-900/40 pb-2 mb-6">
         <div className="flex items-center gap-2">
-          <Activity className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+          <Activity className="w-3.5 h-3.5 text-cyan-400" />
           <span>CORE // MK-85 ARC REACTOR</span>
         </div>
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1">
-            <Radio className={`w-3.5 h-3.5 ${isListening ? 'text-emerald-400 animate-ping' : 'text-slate-500'}`} />
+            <Radio className={`w-3.5 h-3.5 ${isListening ? 'text-emerald-400' : 'text-slate-500'}`} />
             <span>WAKE WORD: <strong className="text-cyan-300 font-bold uppercase tracking-wider">"{wakeWord}"</strong></span>
           </span>
           <span className="hidden sm:inline text-slate-500">|</span>
