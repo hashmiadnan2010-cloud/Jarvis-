@@ -10,6 +10,9 @@ interface JarvisAndroidInterface {
   makeDirectCall?: (phoneNumber: string, contactName: string) => string;
   sendWhatsApp: (phoneNumber: string, message: string) => boolean;
   sendWhatsAppDirect?: (phoneNumber: string, message: string, contactName: string) => string;
+  sendInstagramDirect?: (recipientName: string, message: string) => string;
+  playMusicOrMedia?: (action: string, songQuery: string) => string;
+  askKnowledge?: (question: string, langCode: string) => string;
   getDeviceContacts: () => string;
   getDeviceTelemetry?: () => string;
   setRingerMode?: (mode: string) => string;
@@ -22,6 +25,10 @@ interface JarvisAndroidInterface {
   requestOverlayPermission?: () => boolean;
   requestBatteryOptimization?: () => boolean;
   requestAccessibilityPermission?: () => boolean;
+  requestDndPermission?: () => boolean;
+  requestWriteSettingsPermission?: () => boolean;
+  requestCorePermissions?: () => boolean;
+  moveToBackgroundStandby?: () => boolean;
   openDefaultAssistantSettings?: () => boolean;
   setTtsSpeakingState?: (speaking: boolean) => void;
   consumePendingWakeCommand?: () => string;
@@ -245,6 +252,8 @@ export interface AndroidBackgroundStatus {
   accessibilityEnabled: boolean;
   hasCallPermission: boolean;
   hasContactsPermission: boolean;
+  hasDndAccess: boolean;
+  canWriteSettings: boolean;
 }
 
 let wakeLockSentinel: WakeLockSentinel | null = null;
@@ -263,6 +272,8 @@ export function getAndroidBackgroundStatus(): AndroidBackgroundStatus {
     accessibilityEnabled: false,
     hasCallPermission: false,
     hasContactsPermission: false,
+    hasDndAccess: false,
+    canWriteSettings: false,
   };
   if (typeof window === 'undefined' || !window.JarvisAndroid?.getBackgroundStatus) {
     return fallback;
@@ -279,6 +290,8 @@ export function getAndroidBackgroundStatus(): AndroidBackgroundStatus {
       accessibilityEnabled: Boolean(parsed.accessibilityEnabled),
       hasCallPermission: Boolean(parsed.hasCallPermission),
       hasContactsPermission: Boolean(parsed.hasContactsPermission),
+      hasDndAccess: Boolean(parsed.hasDndAccess),
+      canWriteSettings: Boolean(parsed.canWriteSettings),
     };
   } catch {
     return fallback;
@@ -338,6 +351,42 @@ export function openAndroidDefaultAssistantSettings(): boolean {
   if (typeof window === 'undefined' || !window.JarvisAndroid?.openDefaultAssistantSettings) return false;
   try {
     return window.JarvisAndroid.openDefaultAssistantSettings();
+  } catch {
+    return false;
+  }
+}
+
+export function requestDndAccessPermission(): boolean {
+  if (typeof window === 'undefined' || !window.JarvisAndroid?.requestDndPermission) return false;
+  try {
+    return window.JarvisAndroid.requestDndPermission();
+  } catch {
+    return false;
+  }
+}
+
+export function requestWriteSystemSettingsPermission(): boolean {
+  if (typeof window === 'undefined' || !window.JarvisAndroid?.requestWriteSettingsPermission) return false;
+  try {
+    return window.JarvisAndroid.requestWriteSettingsPermission();
+  } catch {
+    return false;
+  }
+}
+
+export function requestCoreRuntimePermissions(): boolean {
+  if (typeof window === 'undefined' || !window.JarvisAndroid?.requestCorePermissions) return false;
+  try {
+    return window.JarvisAndroid.requestCorePermissions();
+  } catch {
+    return false;
+  }
+}
+
+export function moveToBackgroundStandby(): boolean {
+  if (typeof window === 'undefined' || !window.JarvisAndroid?.moveToBackgroundStandby) return false;
+  try {
+    return window.JarvisAndroid.moveToBackgroundStandby();
   } catch {
     return false;
   }
@@ -548,6 +597,41 @@ export function dispatchNativeWhatsApp(
   }
 
   openExternalWebOrApp(url);
+  return 'web_fallback';
+}
+
+export function dispatchNativeInstagram(recipientName: string, message: string): string {
+  const cleanRecipient = String(recipientName || '').trim();
+  const cleanMessage = String(message || '').trim();
+  if (typeof window !== 'undefined' && window.JarvisAndroid?.sendInstagramDirect) {
+    try {
+      const status = String(window.JarvisAndroid.sendInstagramDirect(cleanRecipient, cleanMessage) || '');
+      if (status && !status.startsWith('error')) return status;
+    } catch (e) {
+      console.warn('Native sendInstagramDirect failed:', e);
+    }
+  }
+  openAnyPhoneApp('instagram', 'com.instagram.android', 'https://www.instagram.com/direct/inbox/');
+  return 'web_fallback';
+}
+
+export function controlNativeMusicPlayback(
+  action: 'play' | 'pause' | 'next' | 'previous',
+  songQuery: string = ''
+): string {
+  if (typeof window !== 'undefined' && window.JarvisAndroid?.playMusicOrMedia) {
+    try {
+      const status = String(window.JarvisAndroid.playMusicOrMedia(action, songQuery) || '');
+      if (status && !status.startsWith('error')) return status;
+    } catch (e) {
+      console.warn('Native playMusicOrMedia failed:', e);
+    }
+  }
+  if (songQuery) {
+    searchInsidePhoneApp('spotify', songQuery);
+  } else {
+    openAnyPhoneApp('spotify', 'com.spotify.music', 'https://open.spotify.com');
+  }
   return 'web_fallback';
 }
 

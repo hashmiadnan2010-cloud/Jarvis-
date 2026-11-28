@@ -318,16 +318,21 @@ export class JarvisSpeechEngine {
 
   private startWatchdog() {
     clearInterval(this.watchdogTimer);
+    const intervalMs = this.useNativeAndroidSpeech ? 2200 : 900;
     this.watchdogTimer = setInterval(() => {
       if (!this.isListeningDesired || !this.autoRestart || this.isSpeaking) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        // When app is backgrounded, JarvisBackgroundService manages cool standby independently
+        return;
+      }
       if (this.useNativeAndroidSpeech) {
         if (!this.isEngineRunning) {
           window.JarvisAndroid?.startNativeListening?.();
         }
       } else if (!this.isEngineRunning) {
-        this.ensureRecognitionRestart(25, 0);
+        this.ensureRecognitionRestart(60, 0);
       }
-    }, 550);
+    }, intervalMs);
   }
 
   public ensureStandbyActive() {
@@ -593,7 +598,7 @@ export class JarvisSpeechEngine {
                 window.JarvisAndroid?.startNativeListening?.();
               }
             }
-          }, Math.max(1200, Math.min(8000, text.length * 105)));
+          }, Math.max(2000, Math.min(35000, text.length * 135)));
           return;
         }
       } catch {
@@ -687,7 +692,7 @@ export class JarvisSpeechEngine {
       finishSpeaking();
     };
 
-    this.speechFallbackTimer = setTimeout(finishSpeaking, Math.max(1100, Math.min(9000, text.length * 95)));
+    this.speechFallbackTimer = setTimeout(finishSpeaking, Math.max(2000, Math.min(35000, text.length * 135)));
     window.speechSynthesis.speak(utterance);
   }
 

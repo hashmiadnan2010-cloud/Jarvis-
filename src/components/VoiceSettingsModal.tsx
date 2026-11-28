@@ -8,8 +8,11 @@ import {
   getAndroidBackgroundStatus,
   openAndroidDefaultAssistantSettings,
   requestAccessibilityAutoSendPermission,
+  requestCoreRuntimePermissions,
+  requestDndAccessPermission,
   requestOverlayDisplayPermission,
   requestUnrestrictedBatteryPermission,
+  requestWriteSystemSettingsPermission,
 } from '../utils/androidBridge';
 
 interface VoiceSettingsModalProps {
@@ -417,14 +420,96 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
                 <div className="flex items-center justify-between text-[11px] font-bold font-mono">
                   <span className="flex items-center gap-1">
                     <Sparkles className="w-3.5 h-3.5" />
-                    WhatsApp Auto-Send
+                    Direct Auto-Send
                   </span>
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-black/50">
                     {bgStatus.isNativeAndroid ? (bgStatus.accessibilityEnabled ? 'ACTIVE' : 'ENABLE') : 'APK'}
                   </span>
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1 leading-tight">
-                  Sends WhatsApp messages directly without tapping the Send button
+                  Auto-sends WhatsApp &amp; Instagram DMs directly without tapping Send
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  jarvisAudio.playTerminalTick();
+                  requestDndAccessPermission();
+                }}
+                className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                  bgStatus.hasDndAccess
+                    ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-200'
+                    : 'border-amber-500/40 bg-slate-900/80 text-amber-200 hover:border-amber-400'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold font-mono">
+                  <span className="flex items-center gap-1">
+                    <Volume2 className="w-3.5 h-3.5" />
+                    Silent / Vibrate
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-black/50">
+                    {bgStatus.isNativeAndroid ? (bgStatus.hasDndAccess ? 'GRANTED' : 'ALLOW') : 'APK'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1 leading-tight">
+                  Lets JARVIS switch Silent, Vibration &amp; Normal modes directly
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  jarvisAudio.playTerminalTick();
+                  requestWriteSystemSettingsPermission();
+                }}
+                className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                  bgStatus.canWriteSettings
+                    ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-200'
+                    : 'border-amber-500/40 bg-slate-900/80 text-amber-200 hover:border-amber-400'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold font-mono">
+                  <span className="flex items-center gap-1">
+                    <Settings className="w-3.5 h-3.5" />
+                    System Controls
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-black/50">
+                    {bgStatus.isNativeAndroid ? (bgStatus.canWriteSettings ? 'GRANTED' : 'ALLOW') : 'APK'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1 leading-tight">
+                  Full phone Brightness, Auto-Rotate &amp; System Settings control
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  jarvisAudio.playTerminalTick();
+                  requestCoreRuntimePermissions();
+                }}
+                className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                  bgStatus.hasCallPermission && bgStatus.hasContactsPermission && bgStatus.hasMicPermission
+                    ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-200'
+                    : 'border-amber-500/40 bg-slate-900/80 text-amber-200 hover:border-amber-400'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold font-mono">
+                  <span className="flex items-center gap-1">
+                    <Mic className="w-3.5 h-3.5" />
+                    Calls &amp; Contacts
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-black/50">
+                    {bgStatus.isNativeAndroid
+                      ? bgStatus.hasCallPermission && bgStatus.hasContactsPermission
+                        ? 'GRANTED'
+                        : 'ALLOW'
+                      : 'APK'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1 leading-tight">
+                  Direct phone calling &amp; real contact lookup without dialer prompt
                 </div>
               </button>
 
@@ -434,7 +519,7 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
                   jarvisAudio.playTerminalTick();
                   openAndroidDefaultAssistantSettings();
                 }}
-                className="p-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 text-cyan-200 hover:border-cyan-400 text-left transition-all cursor-pointer"
+                className="sm:col-span-2 p-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 text-cyan-200 hover:border-cyan-400 text-left transition-all cursor-pointer"
               >
                 <div className="flex items-center justify-between text-[11px] font-bold font-mono">
                   <span className="flex items-center gap-1">

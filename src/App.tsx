@@ -45,12 +45,16 @@ import {
 } from './utils/localCommandParser';
 import {
   consumeNativePendingWakeCommand,
+  controlNativeMusicPlayback,
   controlPhoneSetting,
+  dispatchNativeInstagram,
   dispatchNativeWhatsApp,
   getLiveDeviceContext,
+  isAndroidNativeApp,
   loadDevicePhoneContacts,
   loadInstalledPhoneApps,
   makeNativePhoneCall,
+  moveToBackgroundStandby,
   openAnyPhoneApp,
   openExternalWebOrApp,
   refreshWebBatteryTelemetry,
@@ -61,6 +65,7 @@ import {
   syncAssistantNativeConfig,
   toggleBackgroundKeepAlive,
 } from './utils/androidBridge';
+import { resolveLiveKnowledgeAnswer } from './utils/knowledgeEngine';
 
 function evaluateMathExpression(expr: string): number {
   const sanitized = expr.replace(/\s+/g, '');
@@ -940,6 +945,11 @@ export default function App() {
       setHudStatus(`Executing: "${clean}"`);
       jarvisAudio.playTerminalTick();
 
+      const failsafeUnlock = window.setTimeout(() => {
+        isProcessingRef.current = false;
+        setIsProcessing(false);
+      }, 6500);
+
       try {
         const recentHistory = commandLogsRef.current
           .slice(0, 5)
@@ -969,11 +979,12 @@ export default function App() {
           // Execute clear phone/device/clock/language actions instantaneously (0ms network wait)
           data = localCandidate;
         } else {
-          // Route general questions, reasoning, and chat through the live AI backend
+          // On native Android APK, use short 2s server probe + instant live Wikipedia/DuckDuckGo fallback so answers never hang at "Processing..."
           const candidateBases = getJarvisApiBaseUrls();
+          const fetchTimeoutMs = isAndroidNativeApp() ? 2200 : 7000;
           for (const apiBase of candidateBases) {
             const controller = new AbortController();
-            const timeoutId = window.setTimeout(() => controller.abort(), 7500);
+            const timeoutId = window.setTimeout(() => controller.abort(), fetchTimeoutMs);
             try {
               const res = await fetch(`${apiBase}/api/jarvis/process`, {
                 method: 'POST',
@@ -997,12 +1008,37 @@ export default function App() {
                 }),
               });
               window.clearTimeout(timeoutId);
-              if (res.ok) {
-                data = await res.json();
-                break;
+              const contentType = res.headers.get('content-type') || '';
+              if (res.ok && contentType.includes('application/json')) {
+                const json = await res.json();
+                if (json && json.intent) {
+                  data = json;
+                  break;
+                }
               }
             } catch {
               window.clearTimeout(timeoutId);
+            }
+          }
+
+          const isGenericOfflineReply =
+            !data ||
+            (data.intent === 'GENERAL_CONVERSATION' &&
+              /local mode is active|quota limit|ऑफलाइन लोकल मोड|एआई कोटा/i.test(
+                `${data.englishActionSummary || ''} ${data.hindiVoiceReply || ''}`
+              ));
+
+          if (isGenericOfflineReply) {
+            const liveAnswer = await resolveLiveKnowledgeAnswer(commandText, activeLangCode);
+            if (liveAnswer?.answer) {
+              data = {
+                intent: 'GENERAL_CONVERSATION',
+                englishActionSummary: liveAnswer.answer,
+                hindiVoiceReply: liveAnswer.answer,
+                wakeWordDetected: wakeTriggered,
+                actionPayload: {},
+                quickFollowUps: ['What time is it?', 'Play song', 'Call Mom'],
+              };
             }
           }
         }
@@ -1189,6 +1225,34 @@ export default function App() {
           } else {
             setActiveTab('whatsapp');
           }
+        } else if (intent === 'INSTAGRAM_SEND') {
+          const igRecipient = String(actionPayload.target || '').trim();
+          const igMessage = String(actionPayload.message || 'Hello!').trim();
+          const igRes = dispatchNativeInstagram(igRecipient, igMessage);
+          setTerminalLogs((prev) => [
+            {
+              id: `t-${Date.now()}`,
+              timestamp: new Date().toLocaleTimeString(),
+              command: `instagram --dm "${igRecipient}" "${igMessage}"`,
+              output: `[INSTAGRAM DIRECT] Recipient: ${igRecipient} | Message: "${igMessage}" | Status: ${igRes}`,
+              status: igRes === 'sent_auto' ? 'success' : 'info',
+            },
+            ...prev,
+          ]);
+        } else if (intent === 'PLAY_MUSIC') {
+          const mediaAct = (actionPayload.mediaAction || 'play') as 'play' | 'pause' | 'next' | 'previous';
+          const songQuery = String(actionPayload.searchQuery || '').trim();
+          const musicRes = controlNativeMusicPlayback(mediaAct, songQuery);
+          setTerminalLogs((prev) => [
+            {
+              id: `t-${Date.now()}`,
+              timestamp: new Date().toLocaleTimeString(),
+              command: `music --${mediaAct} "${songQuery || 'active-player'}"`,
+              output: `[MEDIA CONTROL] Action: ${mediaAct} ${songQuery ? `(${songQuery})` : ''} -> ${musicRes}`,
+              status: 'success',
+            },
+            ...prev,
+          ]);
         } else if (intent === 'SEARCH_WEB') {
           const searchAppId = String(actionPayload.appId || 'youtube').toLowerCase();
           const searchQuery = String(actionPayload.searchQuery || clean).trim();
@@ -1221,6 +1285,11 @@ export default function App() {
             setDeviceHardwareBrightness(br);
             setSystemState((s) => ({ ...s, brightness: br }));
           }
+        } else if (intent === 'STANDBY_BACKGROUND') {
+          setHudStatus('Cool Standby Mode Active // Listening in Background');
+          window.setTimeout(() => {
+            moveToBackgroundStandby();
+          }, 1100);
         } else if (intent === 'LAUNCH_APP') {
           const appIdHint = String(actionPayload.appId || '').trim();
           const appTarget = String(actionPayload.target || '').trim();
@@ -1258,6 +1327,7 @@ export default function App() {
         setLatestHindiVoice(errSpeech);
         speakHindiVoice(errSpeech);
       } finally {
+        window.clearTimeout(failsafeUnlock);
         isProcessingRef.current = false;
         setIsProcessing(false);
       }
